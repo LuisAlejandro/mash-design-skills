@@ -1,0 +1,10 @@
+penpot.env
+.env
+node_modules/
+package.json
+package-lock.json
+.playwright/
+.npm-global/
+backups/*.sql
+.figpot-mapping.json
+autoinstall.list

@@ -1,0 +1,62 @@
+{
+  "generatedAt": "<ISO timestamp>",
+  "tokens": {
+    "overview": "<tokenOverview result>",
+    "setCount": "<number>",
+    "themeCount": "<number>",
+    "resolvedTokens": { "<token-name>": "<resolved-value>" },
+    "failedTokens": ["<token-name>"]
+  },
+  "library": {
+    "components": [
+      {
+        "name": "...",
+        "id": "...",
+        "source": "...",
+        "variantProperties": ["State", "Size"],
+        "variants": [{ "name": "...", "props": {} }]
+      }
+    ],
+    "colors": [{ "name": "...", "color": "...", "source": "..." }],
+    "typographies": [
+      { "name": "...", "fontFamily": "...", "fontSize": "...", "source": "..." }
+    ],
+    "availableLibraries": [{ "id": "...", "name": "..." }]
+  },
+  "pageStructure": [
+    { "id": "...", "name": "...", "boardCount": 0, "boards": [] }
+  ],
+  "pages": {
+    "<page-slug>": {
+      "pageId": "<id>",
+      "pageName": "<name>",
+      "updatedAt": "<ISO timestamp>",
+      "comments": [],
+      "fonts": { "usedFonts": [], "availableFonts": [] },
+      "solidColors": [{ "color": "#hex", "count": 0 }],
+      "gradients": [
+        { "type": "linear|radial", "stops": [], "shapeName": "..." }
+      ],
+      "imageFills": [
+        {
+          "imageId": "...",
+          "name": "...",
+          "shapeId": "...",
+          "shapeName": "..."
+        }
+      ],
+      "shadows": [
+        {
+          "color": "...",
+          "opacity": 1,
+          "offsetX": 0,
+          "offsetY": 0,
+          "blur": 0,
+          "spread": 0,
+          "style": "drop-shadow",
+          "shapeName": "..."
+        }
+      ]
+    }
+  }
+}

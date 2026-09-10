@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "Dashboard Home",
+    "slug": "checkout-flow",
+    "width": 1440,
+    "height": "auto",
+    "background": "bg"
+  },
+  "tokens": {
+    "palette": {
+      "bg": "#ffffff",
+      "text": "#111827",
+      "accent": "#2563eb"
+    },
+    "spacing": {
+      "sm": 8,
+      "md": 16
+    },
+    "typography": {
+      "heading": { "family": "Inter", "size": 32, "weight": 700, "lineHeight": 1.2 },
+      "body": { "family": "Inter", "size": 16, "weight": 400, "lineHeight": 1.5 }
+    }
+  },
+  "layout": [],
+  "controlInventory": []
+}

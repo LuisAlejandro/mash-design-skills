@@ -1,0 +1,4 @@
+# Absolute paths of app repos to receive MMD Skills.
+# Copy to autoinstall.list (not committed) and run ./autoinstall.sh
+#
+# /path/to/my-app

@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# MMD Skills stack CLI (Penpot + MCP + OpenDesign). No Make.
+set -euo pipefail
+
+PROJECT_NAME="penpot"
+COMPOSE_FILE="docker-compose.yaml"
+ENV_FILE="penpot.env"
+DEFAULT_STACK="${HOME}/.local/share/mmd-skills"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_error() { echo -e "${RED}Error: $1${NC}" >&2; }
+print_success() { echo -e "${GREEN}$1${NC}"; }
+print_info() { echo -e "${YELLOW}$1${NC}"; }
+print_step() { echo -e "${BLUE}$1${NC}"; }
+
+script_dir() {
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+}
+
+resolve_stack() {
+  local candidate
+  if [ -n "${MMD_STACK_ROOT:-}" ]; then
+    candidate="$(cd "${MMD_STACK_ROOT}" && pwd -P)"
+    echo "$candidate"
+    return 0
+  fi
+  candidate="$(cd "$(script_dir)/.." && pwd -P)"
+  if [ -f "${candidate}/${COMPOSE_FILE}" ]; then
+    echo "$candidate"
+    return 0
+  fi
+  echo "$DEFAULT_STACK"
+}
+
+STACK="$(resolve_stack)"
+export MMD_STACK_ROOT="$STACK"
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    print_error "Docker is not installed. Install Docker Desktop first."
+    exit 1
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    print_error "Docker Compose v2 is not available."
+    exit 1
+  fi
+}
+
+compose() {
+  require_docker
+  cd "$STACK"
+  if [ -f "${STACK}/${ENV_FILE}" ]; then
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+  else
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
+  fi
+}
+
+require_env() {
+  if [ ! -f "${STACK}/${ENV_FILE}" ]; then
+    print_error "Missing ${STACK}/${ENV_FILE}. Run: mmd setup"
+    exit 1
+  fi
+}
+
+require_compose_file() {
+  if [ ! -f "${STACK}/${COMPOSE_FILE}" ]; then
+    print_error "Missing ${STACK}/${COMPOSE_FILE}."
+    print_info "Run install.sh from an app, or invoke ./bin/mmd from the MMD Skills clone."
+    exit 1
+  fi
+}
+
+ensure_env_key() {
+  local key="$1"
+  local default="${2-}"
+  if ! grep -q "^${key}=" "${STACK}/${ENV_FILE}"; then
+    echo "${key}=${default}" >> "${STACK}/${ENV_FILE}"
+    print_info "Appended ${key} to ${ENV_FILE}"
+  fi
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local file="${STACK}/${ENV_FILE}"
+  if grep -q "^${key}=" "$file"; then
+    if [[ "${OSTYPE:-}" == darwin* ]]; then
+      sed -i '' "s|^${key}=.*|${key}=${value}|" "$file"
+    else
+      sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    fi
+  else
+    echo "${key}=${value}" >> "$file"
+  fi
+}
+
+env_value_empty() {
+  local key="$1"
+  local raw
+  raw="$(grep "^${key}=" "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
+  [ -z "$raw" ]
+}
+
+maybe_link_bin() {
+  local dest="${HOME}/.local/bin"
+  if [ -d "$dest" ] && [ -x "${STACK}/bin/mmd" ]; then
+    ln -sfn "${STACK}/bin/mmd" "${dest}/mmd"
+    print_info "Linked ${dest}/mmd → ${STACK}/bin/mmd"
+  fi
+}
+
+cmd_help() {
+  cat <<EOF
+MMD Skills — local Penpot + OpenDesign stack
+===========================================
+
+Usage: mmd <command>
+
+Stack root: ${STACK}
+  Override with MMD_STACK_ROOT.
+
+Lifecycle:
+  setup     Create penpot.env, generate secrets, pull Penpot, build OpenDesign
+  start     Start containers (builds OpenDesign if needed)
+  stop      Stop containers
+  down      Stop and remove containers (keep volumes)
+  restart   Stop then start
+  destroy   Remove this project's containers, images, and volumes (asks first)
+
+Ops:
+  logs      Follow logs
+  status    Show container status
+  update    Pull Penpot images, rebuild OpenDesign, recreate
+  backup    Dump Postgres into backups/
+  doctor    OpenDesign health, agent CLIs, /api/agents
+  convert   Figma → Penpot via figpot (needs .env in the stack root)
+
+URLs:
+  Penpot UI:    http://localhost:9001
+  MCP:          http://localhost:4401/mcp
+  OpenDesign:   http://127.0.0.1:7457
+                Docker Desktop basic auth: user open-design, password = OD_API_TOKEN
+  Mailcatcher:  http://localhost:1080
+
+Penpot UI: open http://localhost:9001, then File → MCP Server → Connect.
+EOF
+}
+
+cmd_setup() {
+  require_docker
+  require_compose_file
+  print_step "=== Penpot + OpenDesign local setup ==="
+  echo "Stack: ${STACK}"
+  echo ""
+
+  cd "$STACK"
+
+  print_step "Environment..."
+  if [ ! -f "${ENV_FILE}" ]; then
+    if [ -f penpot.env.example ]; then
+      cp penpot.env.example "${ENV_FILE}"
+      print_success "Created ${ENV_FILE} from penpot.env.example"
+    else
+      print_error "penpot.env.example not found in ${STACK}"
+      exit 1
+    fi
+  else
+    print_info "${ENV_FILE} already exists (kept; missing OpenDesign keys appended)"
+    ensure_env_key OPEN_DESIGN_IMAGE "ghcr.io/nexu-io/od:latest"
+    ensure_env_key OPEN_DESIGN_MEM_LIMIT "4g"
+    ensure_env_key OPEN_DESIGN_PORT "7457"
+    ensure_env_key OD_CODEX_SANDBOX "danger-full-access"
+    ensure_env_key OD_API_TOKEN ""
+    ensure_env_key CURSOR_API_KEY ""
+    ensure_env_key ANTHROPIC_API_KEY ""
+    ensure_env_key OPENAI_API_KEY ""
+  fi
+
+  if [ ! -f .env ] && [ -f .env.example ]; then
+    cp .env.example .env
+    print_info "Created .env from .env.example (fill tokens before mmd convert)"
+  fi
+  echo ""
+
+  print_step "Secrets..."
+  if ! grep -q "^PENPOT_SECRET_KEY=" "${ENV_FILE}" \
+    || grep -q "^PENPOT_SECRET_KEY=$" "${ENV_FILE}" \
+    || grep -q "^PENPOT_SECRET_KEY=your_secret_key" "${ENV_FILE}"; then
+    set_env_value PENPOT_SECRET_KEY "$(openssl rand -base64 64 | tr -d '\n')"
+    print_success "Generated PENPOT_SECRET_KEY"
+  else
+    print_info "PENPOT_SECRET_KEY already set"
+  fi
+
+  if ! grep -q "^OD_API_TOKEN=" "${ENV_FILE}" || env_value_empty OD_API_TOKEN; then
+    set_env_value OD_API_TOKEN "$(openssl rand -hex 32)"
+    print_success "Generated OD_API_TOKEN"
+  else
+    print_info "OD_API_TOKEN already set"
+  fi
+  echo ""
+
+  print_step "Pulling Penpot Docker images..."
+  compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
+    penpot-postgres penpot-valkey penpot-mailcatch
+  print_success "Penpot images pulled"
+  echo ""
+
+  print_step "Building OpenDesign image (Linux agent CLIs)..."
+  compose build open-design
+  print_success "OpenDesign image built"
+  echo ""
+
+  maybe_link_bin
+
+  print_success "=== Setup complete ==="
+  echo ""
+  print_info "Next:"
+  echo "  1. Fill CURSOR_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY in ${STACK}/${ENV_FILE} if you will run agent jobs"
+  echo "  2. mmd start"
+  echo "  3. Open http://localhost:9001 and create the first user"
+  echo "  4. OpenDesign UI: http://127.0.0.1:7457"
+  echo "     Docker Desktop basic auth: username open-design, password = OD_API_TOKEN"
+  echo "  5. mmd doctor"
+  echo "  6. Install Penpot Desktop: https://github.com/author-more/penpot-desktop"
+  echo "  7. File → MCP Server → Connect in the open file"
+  echo "  8. Point Cursor at http://localhost:4401/mcp (penpot-local)"
+}
+
+cmd_start() {
+  require_compose_file
+  require_env
+  if [ -z "$(docker images -q penpotapp/frontend 2>/dev/null || true)" ]; then
+    cmd_setup
+  fi
+  echo "Starting Penpot and OpenDesign..."
+  compose up --remove-orphans --build --detach
+  echo "Penpot:     http://localhost:9001"
+  echo "MCP:        http://localhost:4401/mcp"
+  echo "OpenDesign: http://127.0.0.1:7457"
+  echo "Check status with 'mmd status'"
+}
+
+cmd_stop() {
+  require_compose_file
+  echo "Stopping containers..."
+  compose stop
+}
+
+cmd_down() {
+  require_compose_file
+  echo "Stopping and removing containers..."
+  compose down --remove-orphans
+}
+
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
+cmd_logs() {
+  require_compose_file
+  compose logs -f
+}
+
+cmd_status() {
+  require_compose_file
+  compose ps
+}
+
+cmd_update() {
+  require_compose_file
+  require_env
+  compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
+    penpot-postgres penpot-valkey penpot-mailcatch
+  compose up --remove-orphans --build --detach
+  echo "Penpot and OpenDesign updated and restarted"
+}
+
+cmd_backup() {
+  require_compose_file
+  require_env
+  mkdir -p "${STACK}/backups"
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  compose exec -T penpot-postgres pg_dump -U penpot penpot > "${STACK}/backups/penpot-${stamp}.sql"
+  echo "Database backup created in ${STACK}/backups/"
+}
+
+cmd_doctor() {
+  require_compose_file
+  require_env
+  local port token
+  port="$(grep '^OPEN_DESIGN_PORT=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
+  port="${port:-7457}"
+  echo "OpenDesign health..."
+  curl -sf "http://127.0.0.1:${port}/api/health"
+  echo ""
+  echo "CLI binaries inside the container..."
+  compose exec -T open-design sh -c 'command -v cursor-agent && command -v claude && command -v codex && command -v opencode && command -v pi'
+  echo "GET /api/agents (Bearer OD_API_TOKEN)..."
+  token="$(grep '^OD_API_TOKEN=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2-)"
+  curl -sf -H "Authorization: Bearer ${token}" "http://127.0.0.1:${port}/api/agents"
+  echo ""
+}
+
+cmd_destroy() {
+  require_compose_file
+  echo ""
+  echo "WARNING!!!"
+  echo "This will stop and delete all containers, images, and volumes for this Penpot project."
+  echo "Stack: ${STACK}"
+  echo ""
+  if [ "${MMD_CONFIRM_DESTROY:-}" = "1" ]; then
+    :
+  elif [ -t 0 ]; then
+    read -r -p "Press ctrl+c to abort or enter to continue." -n 1 || true
+    echo ""
+  else
+    print_error "Refusing destroy without a TTY. Set MMD_CONFIRM_DESTROY=1 to proceed."
+    exit 1
+  fi
+  compose down --rmi all --remove-orphans --volumes
+  echo "Project destroyed."
+}
+
+cmd_convert() {
+  require_compose_file
+  if [ ! -f "${STACK}/convert.sh" ]; then
+    print_error "convert.sh is not in ${STACK}. Copy it from the MMD Skills clone or run from the clone."
+    exit 1
+  fi
+  (cd "$STACK" && bash ./convert.sh)
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    help|-h|--help) cmd_help ;;
+    setup) cmd_setup "$@" ;;
+    start|serve) cmd_start "$@" ;;
+    stop) cmd_stop "$@" ;;
+    down|clean) cmd_down "$@" ;;
+    restart) cmd_restart "$@" ;;
+    logs) cmd_logs "$@" ;;
+    status) cmd_status "$@" ;;
+    update) cmd_update "$@" ;;
+    backup) cmd_backup "$@" ;;
+    doctor|od-smoke) cmd_doctor "$@" ;;
+    destroy) cmd_destroy "$@" ;;
+    convert) cmd_convert "$@" ;;
+    *)
+      print_error "Unknown command: $cmd"
+      cmd_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
