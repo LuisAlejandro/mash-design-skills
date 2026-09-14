@@ -39,7 +39,7 @@ See [mcp.json.example](mcp.json.example).
 
 The HTTP server is not enough by itself. The official MCP talks to the **open file** through Penpot’s MCP plugin.
 
-1. Open http://localhost:9001 and create the first user if needed.
+1. Open http://localhost:9001 and log in with the local user from `mmd setup`.
 2. Open a design file.
 3. **File → MCP Server → Connect** (keep that tab and the plugin connected while agents run).
 
@@ -55,8 +55,9 @@ Do not commit that token. Docs: [Penpot MCP](https://help.penpot.app/mcp/), [Doc
 
 ## Admin CLI (optional)
 
-If registration is disabled, create a user in the backend container (name from `docker ps`):
+`mmd setup` already creates the local profile (registration is disabled). For an extra user:
 
 ```bash
-docker exec -ti penpot-penpot-backend-1 python3 manage.py create-profile
+docker exec -T penpot-penpot-backend-1 python3 manage.py create-profile \
+  -n "Name" -e you@local.test -p 'secret' --skip-tutorial --skip-walkthrough
 ```

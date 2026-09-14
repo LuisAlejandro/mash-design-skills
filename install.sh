@@ -2,13 +2,13 @@
 # Install MMD Skills into the current app (Cursor skills + machine Penpot stack).
 set -euo pipefail
 
-INSTALL_ROOT="$(pwd -P)"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SOURCE_ROOT="${MMD_SKILLS:-$SCRIPT_DIR}"
 SOURCE_ROOT="$(cd "$SOURCE_ROOT" && pwd -P)"
 VERSION_FILE="$SOURCE_ROOT/VERSION"
 INSTALL_VERSION="0.1.0"
 DEFAULT_STACK="${HOME}/.local/share/mmd-skills"
+APP_ARG=""
 
 CHECK_ONLY=false
 WRITE_PIN=true
@@ -24,8 +24,9 @@ usage() {
   cat <<EOF
 Usage: install.sh [options]
 
-Run from the app repository you want skills in.
+Run from the app repository you want skills in, or pass --app <dir>.
 
+  --app <dir>       App root to install into (default: current directory)
   --check           Verify a previous install
   --version         Print toolkit version
   --write-pin       Write rosey/mmd-skills.json (default)
@@ -45,6 +46,14 @@ EOF
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version) echo "$INSTALL_VERSION"; exit 0 ;;
+    --app)
+      if [ "${2:-}" = "" ] || [ "${2#--}" != "$2" ]; then
+        echo "Error: --app requires a directory" >&2
+        exit 1
+      fi
+      APP_ARG="$2"
+      shift 2
+      ;;
     --check) CHECK_ONLY=true; shift ;;
     --write-pin) WRITE_PIN=true; shift ;;
     --no-write-pin) WRITE_PIN=false; shift ;;
@@ -58,6 +67,18 @@ while [ "$#" -gt 0 ]; do
 done
 
 STACK_ROOT="${MMD_STACK_ROOT:-$DEFAULT_STACK}"
+
+if [ -n "$APP_ARG" ]; then
+  if [ ! -d "$APP_ARG" ]; then
+    echo "Error: --app is not a directory: $APP_ARG" >&2
+    exit 1
+  fi
+  INSTALL_ROOT="$(cd "$APP_ARG" && pwd -P)"
+else
+  INSTALL_ROOT="$(pwd -P)"
+fi
+
+cd "$INSTALL_ROOT"
 
 MANAGED_SKILLS=(
   mmd-setup
@@ -89,6 +110,7 @@ if [ "$INSTALL_ROOT" = "$SOURCE_ROOT" ] && [ "$CHECK_ONLY" = false ]; then
   echo "Error: Cannot install MMD Skills into its own source repository." >&2
   echo "   cd into your app, then run:" >&2
   echo "   $SOURCE_ROOT/install.sh" >&2
+  echo "   or: $SOURCE_ROOT/install.sh --app /path/to/app" >&2
   exit 1
 fi
 
@@ -102,6 +124,13 @@ if [ ! -d "$SOURCE_ROOT/.agents/shared/lib" ]; then
   exit 1
 fi
 
+for required in docker-compose.yaml penpot.env.example bin/mmd docker/opendesign/Dockerfile; do
+  if [ ! -e "$SOURCE_ROOT/$required" ]; then
+    echo "Error: missing toolkit file: $SOURCE_ROOT/$required" >&2
+    exit 1
+  fi
+done
+
 copy_tree() {
   local src="$1"
   local dest="$2"
@@ -111,20 +140,26 @@ copy_tree() {
       --exclude node_modules \
       --exclude .venv \
       --exclude .env \
+      --exclude __pycache__ \
       "$src/" "$dest/"
   else
     rm -rf "$dest"
     mkdir -p "$dest"
-    tar -C "$src" --exclude node_modules --exclude .venv --exclude .env -cf - . \
+    tar -C "$src" --exclude node_modules --exclude .venv --exclude .env --exclude __pycache__ -cf - . \
       | tar -C "$dest" -xf -
   fi
 }
 
 stack_health_ok() {
   local port="${OPEN_DESIGN_PORT:-7457}"
+  local raw=""
   if [ -f "${STACK_ROOT}/penpot.env" ]; then
-    port="$(grep '^OPEN_DESIGN_PORT=' "${STACK_ROOT}/penpot.env" | tail -n 1 | cut -d= -f2- || true)"
-    port="${port:-7457}"
+    raw="$(grep '^OPEN_DESIGN_PORT=' "${STACK_ROOT}/penpot.env" | tail -n 1 | cut -d= -f2- || true)"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    raw="${raw%\'}"
+    raw="${raw#\'}"
+    port="${raw:-7457}"
   fi
   curl -fsS --max-time 3 "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1
 }
@@ -167,9 +202,18 @@ fi
 # Replace only lib so an existing .agents/shared/references is left intact.
 install_shared_refs() {
   [ -d "$SOURCE_ROOT/.agents/shared/lib" ] || return 0
-  rm -rf .agents/shared/lib
   mkdir -p .agents/shared
-  cp -R "$SOURCE_ROOT/.agents/shared/lib/." .agents/shared/lib/
+  if command -v rsync >/dev/null 2>&1; then
+    mkdir -p .agents/shared/lib
+    rsync -a --delete \
+      --exclude __pycache__ \
+      --exclude '*.pyc' \
+      "$SOURCE_ROOT/.agents/shared/lib/" .agents/shared/lib/
+  else
+    rm -rf .agents/shared/lib
+    mkdir -p .agents/shared/lib
+    cp -R "$SOURCE_ROOT/.agents/shared/lib/." .agents/shared/lib/
+  fi
 }
 
 echo "-> Copying shared lib..."
@@ -208,7 +252,7 @@ fi
 # --- MCP merge ---
 
 merge_mcp() {
-  local dest=".cursor/mcp.json"
+  local dest="$INSTALL_ROOT/.cursor/mcp.json"
   mkdir -p .cursor
   python3 - "$dest" <<'PY'
 import json, sys
@@ -346,27 +390,22 @@ done
 
 install_playwright() {
   local dir="$1"
-  if [ ! -f "$dir/package.json" ] && [ ! -d "$dir/.venv" ]; then
+  if [ ! -x "$dir/node_modules/.bin/playwright" ]; then
     return 0
   fi
-  if [ -f "$dir/package.json" ] && command -v npx >/dev/null 2>&1; then
-    echo "-> playwright chromium: $(basename "$dir")"
-    (cd "$dir" && npx playwright install chromium) \
-      || echo "   warning: playwright install failed in $dir (continuing)"
-  fi
+  echo "-> playwright chromium: $(basename "$dir")"
+  (cd "$dir" && npx playwright install chromium) \
+    || echo "   warning: playwright install failed in $dir (continuing)"
 }
 
 install_playwright ".cursor/skills/penpot-implement-design"
-if [ -f .cursor/skills/od-design-candidates/package.json ]; then
-  install_playwright ".cursor/skills/od-design-candidates"
-fi
 
 CAND=".cursor/skills/od-design-candidates"
 if [ -f "$CAND/requirements.txt" ]; then
   echo "-> Python venv: od-design-candidates"
   if command -v python3 >/dev/null 2>&1; then
     python3 -m venv "$CAND/.venv"
-    "$CAND/.venv/bin/pip" install -r "$CAND/requirements.txt" \
+    "$CAND/.venv/bin/python" -m pip install -r "$CAND/requirements.txt" \
       || echo "   warning: pip install failed (continuing)"
     if [ -x "$CAND/.venv/bin/playwright" ]; then
       "$CAND/.venv/bin/playwright" install chromium \
@@ -380,25 +419,26 @@ fi
 # --- stack ---
 
 sync_stack() {
-  mkdir -p "$STACK_ROOT/bin" "$STACK_ROOT/docker"
+  STACK_ROOT="$(mkdir -p "$STACK_ROOT" && cd "$STACK_ROOT" && pwd -P)"
+  mkdir -p "$STACK_ROOT/bin" "$STACK_ROOT/docker/opendesign"
   echo "-> Syncing stack to $STACK_ROOT..."
   if command -v rsync >/dev/null 2>&1; then
     rsync -a "$SOURCE_ROOT/docker-compose.yaml" "$STACK_ROOT/"
     rsync -a "$SOURCE_ROOT/penpot.env.example" "$STACK_ROOT/"
     rsync -a "$SOURCE_ROOT/bin/mmd" "$STACK_ROOT/bin/mmd"
-    rsync -a "$SOURCE_ROOT/docker/opendesign/" "$STACK_ROOT/docker/opendesign/"
+    rsync -a --delete "$SOURCE_ROOT/docker/opendesign/" "$STACK_ROOT/docker/opendesign/"
     [ -f "$SOURCE_ROOT/convert.sh" ] && rsync -a "$SOURCE_ROOT/convert.sh" "$STACK_ROOT/"
     [ -f "$SOURCE_ROOT/.env.example" ] && rsync -a "$SOURCE_ROOT/.env.example" "$STACK_ROOT/"
   else
     cp "$SOURCE_ROOT/docker-compose.yaml" "$STACK_ROOT/"
     cp "$SOURCE_ROOT/penpot.env.example" "$STACK_ROOT/"
     cp "$SOURCE_ROOT/bin/mmd" "$STACK_ROOT/bin/mmd"
-    mkdir -p "$STACK_ROOT/docker/opendesign"
     cp -R "$SOURCE_ROOT/docker/opendesign/." "$STACK_ROOT/docker/opendesign/"
     [ -f "$SOURCE_ROOT/convert.sh" ] && cp "$SOURCE_ROOT/convert.sh" "$STACK_ROOT/"
     [ -f "$SOURCE_ROOT/.env.example" ] && cp "$SOURCE_ROOT/.env.example" "$STACK_ROOT/"
   fi
   chmod +x "$STACK_ROOT/bin/mmd"
+  chmod +x "$STACK_ROOT/docker/opendesign/"*.sh 2>/dev/null || true
   if [ ! -f "$STACK_ROOT/penpot.env" ] && [ -f "$SOURCE_ROOT/penpot.env" ]; then
     cp "$SOURCE_ROOT/penpot.env" "$STACK_ROOT/penpot.env"
     echo "   copied existing penpot.env from toolkit clone"
@@ -432,4 +472,4 @@ echo "   Skills: .cursor/skills (managed pack only)"
 echo "   Shared: .agents/shared/lib"
 echo "   Pin:    rosey/mmd-skills.json"
 echo "   Stack:  $STACK_ROOT"
-echo "   Next:   open http://localhost:9001  ·  mmd doctor  ·  File → MCP Server → Connect"
+echo "   Next:   open http://localhost:9001  ·  mmd doctor  ·  activate penpot-local MCP"

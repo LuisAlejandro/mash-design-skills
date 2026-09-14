@@ -36,12 +36,12 @@ Re-run `install.sh` to update. Flags: `--check`, `--no-stack`, `--no-start`, `--
 
 ## After install
 
-1. Open [http://localhost:9001](http://localhost:9001), create the first user, then open a file and **File → MCP Server → Connect**. Keep that tab open while agents run.
+1. Open [http://localhost:9001](http://localhost:9001) and log in with the local user from `mmd setup`. Activate the **penpot-local** MCP in Cursor.
 2. Compose OpenDesign uses port `7457` so it does not collide with a host Open Design app on `7456`.
 3. Cursor uses project MCP `penpot-local`, or the same snippet in `~/.cursor/mcp.json` as `user-penpot-local`. Both names work. See [MCP-SETUP.md](MCP-SETUP.md).
-4. Fill `CURSOR_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the **stack** `penpot.env` before OpenDesign agent jobs.
+4. `mmd setup` prompts for a **local Penpot** email/password (not penpot.app) and for a provider API key (Cursor / Anthropic / OpenAI). It writes the **stack** `penpot.env` (email only; password is not stored). Use `mmd auth` later for keys. Scripted installs: `MMD_NONINTERACTIVE=1` with `PENPOT_LOCAL_EMAIL` and `PENPOT_LOCAL_PASSWORD`, or `--skip-user` / `--skip-auth`. `mmd start` applies keys to harnesses. `pick-agent` only selects a harness that is on PATH and has matching credentials.
 
-OpenDesign UI: [http://127.0.0.1:7457](http://127.0.0.1:7457). Docker Desktop may prompt for basic auth — username `open-design`, password = `OD_API_TOKEN`. Mailcatcher: [http://localhost:1080](http://localhost:1080).
+OpenDesign UI: [http://127.0.0.1:7457](http://127.0.0.1:7457). Mailcatcher: [http://localhost:1080](http://localhost:1080).
 
 ## Stack CLI (`mmd`)
 
@@ -49,17 +49,18 @@ No Make. From a clone: `./bin/mmd <command>`. After install, `mmd` may be on `PA
 
 | Command | What it does |
 | --- | --- |
-| `mmd setup` | Create `penpot.env`, generate secrets, pull Penpot, build OpenDesign |
-| `mmd start` | `compose up --build --detach` |
+| `mmd setup` | Create `penpot.env`, generate secrets, local Penpot user (`--skip-user` / `PENPOT_LOCAL_EMAIL` + `PENPOT_LOCAL_PASSWORD`), optional provider keys (`--skip-auth` / `MMD_NONINTERACTIVE=1`), pull Penpot, build OpenDesign |
+| `mmd start` | `compose up --build --detach`, then apply harness logins |
+| `mmd auth` | Prompt for provider keys, recreate `open-design`, apply harness logins |
 | `mmd stop` | Stop containers |
 | `mmd down` | Stop and remove containers (keep volumes) |
 | `mmd restart` | Stop then start |
 | `mmd destroy` | Remove this project's containers, images, and volumes (asks first) |
 | `mmd logs` | Follow logs |
 | `mmd status` | `compose ps` |
-| `mmd update` | Pull Penpot images, rebuild OpenDesign, recreate |
+| `mmd update` | Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins |
 | `mmd backup` | Dump Postgres into `backups/` |
-| `mmd doctor` | OpenDesign health, agent CLIs, `/api/agents` |
+| `mmd doctor` | OpenDesign health, agent CLIs, runnable harness table |
 | `mmd convert` | Figma → Penpot via [figpot](https://github.com/betagouv/figpot) (optional; needs `.env`) |
 
 Compose project name is `penpot` so existing volumes keep working. The stack is loopback-only. Do not publish the fat OpenDesign image (`penpot-opendesign:local` contains vendor CLIs).

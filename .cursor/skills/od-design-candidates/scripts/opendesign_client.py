@@ -119,17 +119,17 @@ class OpenDesignClient:
             return False, MISSING_TOKEN_HINT
         return True, ""
 
-    def resolve_run_agent(self, requested: str | None = None) -> str:
+    def resolve_run_agent(self) -> str:
         available: list[str] | None = None
         try:
             payload = self._request("GET", "/api/agents")
             available = parse_agent_ids(payload)
         except Exception as exc:  # noqa: BLE001
-            override = (requested or os.environ.get("OPEN_DESIGN_RUN_AGENT") or "").strip()
+            override = (os.environ.get("OPEN_DESIGN_RUN_AGENT") or "").strip()
             if not override:
                 raise RuntimeError(AGENT_UNAVAILABLE_HINT) from exc
             available = []
-        return pick_run_agent(requested=requested, available=available)
+        return pick_run_agent(available=available)
 
     def create_project(
         self,

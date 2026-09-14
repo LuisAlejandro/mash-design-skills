@@ -23,6 +23,8 @@ COPY --from=glibc /out/lib/ /lib/
 COPY --from=glibc /out/usr/lib/ /usr/lib/
 COPY --from=glibc /out/lib64/ /lib64/
 
+# CLIs go to /usr/local/bin and /opt. HOME/.local/bin is not reliable at
+# runtime: Compose overlays /home/open-design with open_design_home.
 ENV HOME=/home/open-design \
     PATH="/usr/local/bin:/home/open-design/.local/bin:${PATH}"
 
@@ -36,7 +38,9 @@ USER open-design
 WORKDIR /app
 
 # Fail the build if the daemon user cannot execute the agent CLIs.
+# cursor-agent status used to hang (PATH wrapper overwrote the launcher).
 RUN cursor-agent --version \
+    && timeout 20 cursor-agent status \
     && claude --version \
     && codex --version \
     && opencode --version \

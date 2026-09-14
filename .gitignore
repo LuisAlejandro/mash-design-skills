@@ -8,3 +8,7 @@ package-lock.json
 backups/*.sql
 .figpot-mapping.json
 autoinstall.list
+__pycache__/
+*.py[cod]
+*$py.class
+pipeline-smoke/

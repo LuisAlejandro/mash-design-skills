@@ -276,8 +276,8 @@ services:
       - penpot
 
   ## OpenDesign daemon (official ghcr.io/nexu-io/od plus Linux agent CLIs).
-  ## Loopback only. Browser basic auth on Docker Desktop: user open-design,
-  ## password = OD_API_TOKEN from penpot.env.
+  ## Loopback only. API token auth is off (OPEN_DESIGN_DISABLE_API_AUTH=1)
+  ## so the UI at :7457 does not prompt; the port is bound to 127.0.0.1.
   open-design:
     image: penpot-opendesign:local
     pull_policy: build
@@ -297,6 +297,7 @@ services:
       OD_PORT: "7456"
       OD_WEB_PORT: ${OPEN_DESIGN_PORT:-7457}
       OD_API_TOKEN: ${OD_API_TOKEN:-}
+      OD_DISABLE_API_AUTH: ${OPEN_DESIGN_DISABLE_API_AUTH:-1}
       OD_ALLOWED_ORIGINS: ${OPEN_DESIGN_ALLOWED_ORIGINS:-}
       OD_CODEX_SANDBOX: ${OD_CODEX_SANDBOX:-danger-full-access}
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
@@ -304,6 +305,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - open_design_data:/app/.od
+      # Config only (~/.claude.json, ~/.codex). CLI binaries live in the image
+      # under /opt and /usr/local/bin — install-clis must not leave them in HOME.
       - open_design_home:/home/open-design
     tmpfs:
       - /tmp

@@ -27,11 +27,13 @@ MISSING_TOKEN_HINT = (
     "penpot.env in the stack root) and retry. You can also export OD_API_TOKEN."
 )
 AGENT_UNAVAILABLE_HINT = (
-    "No OpenDesign run agent is available. Set OPEN_DESIGN_RUN_AGENT, or add "
-    "CURSOR_API_KEY / ANTHROPIC_API_KEY in the stack penpot.env, then run "
-    "`mmd doctor`. Do not invent HTML."
+    "No runnable OpenDesign agent. Run `mmd auth` to save CURSOR_API_KEY / "
+    "ANTHROPIC_API_KEY / OPENAI_API_KEY in the stack penpot.env, then `mmd start`. "
+    "Or set OPEN_DESIGN_RUN_AGENT to a harness that is on PATH and authenticated. "
+    "Do not invent HTML."
 )
-PREFERRED_RUN_AGENTS = ("claude", "opencode", "pi")
+CREDENTIAL_ENV_KEYS = ("CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+PREFERRED_RUN_AGENTS = ("claude", "codex", "opencode", "pi")
 MAKE_START_HINT = START_HINT
 
 SKIP_EXPORT_PREFIXES = ("context/", "logs/", ".git/")
@@ -244,7 +246,63 @@ def require_health(config: DaemonConfig | None = None) -> DaemonConfig:
     return cfg
 
 
-def parse_agent_ids(payload: Any) -> list[str]:
+def merge_stack_credentials(
+    environ: dict[str, str],
+    config: DaemonConfig | None,
+) -> dict[str, str]:
+    """Process env wins when non-empty; otherwise stack penpot.env."""
+    merged = dict(environ)
+    file_env: dict[str, str] = {}
+    if config is not None and config.env_path is not None:
+        file_env = _parse_env_file(config.env_path)
+    for key in CREDENTIAL_ENV_KEYS:
+        if not str(merged.get(key, "")).strip() and file_env.get(key, "").strip():
+            merged[key] = file_env[key].strip()
+    return merged
+
+
+def credential_flags(environ: dict[str, str]) -> dict[str, bool]:
+    return {key: bool(str(environ.get(key, "")).strip()) for key in CREDENTIAL_ENV_KEYS}
+
+
+def runnable_agent_ids(
+    path_ids: list[str],
+    environ: dict[str, str],
+    *,
+    opencode_auth: bool = False,
+) -> list[str]:
+    """Harnesses that are on PATH and have matching credentials.
+
+    ``opencode_auth`` is an optional probe (non-empty container auth.json).
+    Do not treat OpenCode as runnable from PATH alone.
+    """
+    path = {ident for ident in path_ids if ident}
+    flags = credential_flags(environ)
+    anthropic_or_openai = flags["ANTHROPIC_API_KEY"] or flags["OPENAI_API_KEY"]
+    out: list[str] = []
+    if "cursor-agent" in path and flags["CURSOR_API_KEY"]:
+        out.append("cursor-agent")
+    if "claude" in path and flags["ANTHROPIC_API_KEY"]:
+        out.append("claude")
+    if "codex" in path and flags["OPENAI_API_KEY"]:
+        out.append("codex")
+    opencode_ready = anthropic_or_openai or opencode_auth
+    if "opencode" in path and opencode_ready:
+        out.append("opencode")
+    if "byok-opencode" in path and opencode_ready:
+        out.append("byok-opencode")
+    if "pi" in path and anthropic_or_openai:
+        out.append("pi")
+    return out
+
+
+def parse_agent_ids(payload: Any, *, available_only: bool = True) -> list[str]:
+    """Return agent ids from GET /api/agents.
+
+    Dict entries with ``available: false`` are omitted by default so pickers
+    do not select catalog names whose CLIs are missing in the container.
+    String ids and dicts without an ``available`` field stay eligible.
+    """
     if payload is None:
         return []
     if isinstance(payload, list):
@@ -254,18 +312,23 @@ def parse_agent_ids(payload: Any) -> list[str]:
         if isinstance(items, dict):
             items = list(items.values())
         if not items and isinstance(payload.get("id"), str):
-            return [str(payload["id"]).strip()]
+            ident = str(payload["id"]).strip()
+            if ident and not (available_only and payload.get("available") is False):
+                return [ident]
+            return []
     else:
         return []
     out: list[str] = []
     seen: set[str] = set()
     for item in items if isinstance(items, list) else []:
         ident = ""
+        skip = False
         if isinstance(item, str):
             ident = item.strip()
         elif isinstance(item, dict):
             ident = str(item.get("id") or item.get("agentId") or item.get("name") or "").strip()
-        if ident and ident not in seen:
+            skip = available_only and item.get("available") is False
+        if ident and ident not in seen and not skip:
             seen.add(ident)
             out.append(ident)
     return out
@@ -277,28 +340,34 @@ def list_run_agents(*, config: DaemonConfig | None = None) -> list[str]:
 
 def pick_run_agent(
     *,
-    requested: str | None = None,
     available: list[str] | None = None,
     environ: dict[str, str] | None = None,
     config: DaemonConfig | None = None,
+    opencode_auth: bool = False,
 ) -> str:
-    env = environ if environ is not None else os.environ
-    override = (requested or env.get("OPEN_DESIGN_RUN_AGENT") or "").strip()
+    if environ is None:
+        env = merge_stack_credentials(dict(os.environ), config or load_daemon_config())
+    else:
+        env = merge_stack_credentials(dict(environ), config)
+    override = (env.get("OPEN_DESIGN_RUN_AGENT") or "").strip()
     ids = list(available) if available is not None else list_run_agents(config=config)
     if override:
-        if ids and override not in ids:
-            listed = ", ".join(ids)
+        path_for_override = ids if ids else [override]
+        runnable = runnable_agent_ids(path_for_override, env, opencode_auth=opencode_auth)
+        if override not in runnable:
+            listed = ", ".join(runnable) if runnable else "(none)"
             raise RuntimeError(
-                f"OpenDesign agent {override!r} is not in GET /api/agents ({listed}). "
+                f"OpenDesign agent {override!r} is not runnable ({listed}). "
                 f"{AGENT_UNAVAILABLE_HINT}"
             )
         return override
+    runnable = runnable_agent_ids(ids, env, opencode_auth=opencode_auth)
     prefer: list[str] = []
-    if env.get("CURSOR_API_KEY", "").strip():
+    if credential_flags(env)["CURSOR_API_KEY"]:
         prefer.append("cursor-agent")
     prefer.extend(PREFERRED_RUN_AGENTS)
     for name in prefer:
-        if name in ids:
+        if name in runnable:
             return name
     raise RuntimeError(AGENT_UNAVAILABLE_HINT)
 
@@ -396,7 +465,6 @@ def _cli(argv: list[str] | None = None) -> int:
     pick = sub.add_parser("pick-agent", help="Pick an OpenDesign run agentId")
     pick.add_argument("--repo-root", type=Path, default=None)
     pick.add_argument("--stack-root", type=Path, default=None)
-    pick.add_argument("--agent-id", default=None)
 
     export = sub.add_parser("export-project", help="Download project files via HTTP")
     export.add_argument("--project-id", required=True)
@@ -427,7 +495,7 @@ def _cli(argv: list[str] | None = None) -> int:
 
     if args.command == "pick-agent":
         require_health(cfg)
-        print(pick_run_agent(requested=args.agent_id, config=cfg))
+        print(pick_run_agent(config=cfg))
         return 0
 
     if args.command == "export-project":

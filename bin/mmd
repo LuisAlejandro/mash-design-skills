@@ -89,15 +89,35 @@ set_env_value() {
   local key="$1"
   local value="$2"
   local file="${STACK}/${ENV_FILE}"
-  if grep -q "^${key}=" "$file"; then
-    if [[ "${OSTYPE:-}" == darwin* ]]; then
-      sed -i '' "s|^${key}=.*|${key}=${value}|" "$file"
-    else
-      sed -i "s|^${key}=.*|${key}=${value}|" "$file"
-    fi
-  else
-    echo "${key}=${value}" >> "$file"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_error "python3 is required to write ${ENV_FILE}"
+    exit 1
   fi
+  python3 - "$file" "$key" "$value" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+text = path.read_text(encoding="utf-8") if path.is_file() else ""
+lines = text.splitlines()
+prefix = f"{key}="
+replaced = False
+out = []
+for line in lines:
+    if line.startswith(prefix):
+        if not replaced:
+            out.append(f"{key}={value}")
+            replaced = True
+        continue
+    out.append(line)
+if not replaced:
+    if out and out[-1] != "":
+        out.append("")
+    out.append(f"{key}={value}")
+path.write_text("\n".join(out) + "\n", encoding="utf-8")
+PY
 }
 
 env_value_empty() {
@@ -105,6 +125,262 @@ env_value_empty() {
   local raw
   raw="$(grep "^${key}=" "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
   [ -z "$raw" ]
+}
+
+any_provider_key_set() {
+  ! env_value_empty CURSOR_API_KEY && return 0
+  ! env_value_empty ANTHROPIC_API_KEY && return 0
+  ! env_value_empty OPENAI_API_KEY && return 0
+  return 1
+}
+
+env_value() {
+  local key="$1"
+  grep "^${key}=" "${STACK}/${ENV_FILE}" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
+}
+
+penpot_profile_exists() {
+  local email="$1"
+  local escaped="${email//\'/\'\'}"
+  local found
+  found="$(compose exec -T penpot-postgres psql -U penpot -d penpot -tAc \
+    "SELECT 1 FROM profile WHERE lower(email) = lower('${escaped}')" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ "$found" = "1" ]
+}
+
+prompt_penpot_local_user() {
+  PENPOT_SETUP_EMAIL=""
+  PENPOT_SETUP_PASSWORD=""
+  PENPOT_SETUP_FULLNAME=""
+  if [ "${SKIP_USER:-0}" = "1" ]; then
+    print_info "Skipping local Penpot user (--skip-user)"
+    return 0
+  fi
+  if [ "${MMD_NONINTERACTIVE:-}" = "1" ] || [ ! -t 0 ]; then
+    PENPOT_SETUP_EMAIL="${PENPOT_LOCAL_EMAIL:-}"
+    PENPOT_SETUP_PASSWORD="${PENPOT_LOCAL_PASSWORD:-}"
+    if [ -z "$PENPOT_SETUP_EMAIL" ] || [ -z "$PENPOT_SETUP_PASSWORD" ]; then
+      print_info "Skipping local Penpot user (no TTY). Set PENPOT_LOCAL_EMAIL and PENPOT_LOCAL_PASSWORD, or re-run mmd setup in a terminal."
+      return 0
+    fi
+    PENPOT_SETUP_FULLNAME="${PENPOT_SETUP_EMAIL%%@*}"
+    return 0
+  fi
+
+  print_step "Local Penpot user..."
+  echo "This login is only for your local Penpot at http://localhost:9001."
+  echo "It is not a penpot.app account. Registration is disabled on this stack;"
+  echo "setup creates one local profile so you can open files and connect MCP."
+  echo ""
+  local default_email=""
+  default_email="$(env_value PENPOT_LOCAL_EMAIL)"
+  local email=""
+  while true; do
+    if [ -n "$default_email" ]; then
+      read -r -p "Email [${default_email}]: " email
+      email="${email:-$default_email}"
+    else
+      read -r -p "Email: " email
+    fi
+    case "$email" in
+      *@*.*) break ;;
+      *) print_error "Enter an email like you@example.com (local-only; any domain is fine)" ;;
+    esac
+  done
+  local password="" confirm=""
+  while true; do
+    read -r -s -p "Password: " password
+    echo ""
+    if [ -z "$password" ]; then
+      print_error "Password cannot be empty"
+      continue
+    fi
+    read -r -s -p "Confirm password: " confirm
+    echo ""
+    if [ "$password" != "$confirm" ]; then
+      print_error "Passwords do not match"
+      continue
+    fi
+    break
+  done
+  PENPOT_SETUP_EMAIL="$email"
+  PENPOT_SETUP_PASSWORD="$password"
+  PENPOT_SETUP_FULLNAME="${email%%@*}"
+}
+
+ensure_penpot_backend() {
+  print_step "Starting Penpot backend (needed to create the local user)..."
+  compose up -d penpot-postgres penpot-valkey penpot-backend
+  local i
+  for i in $(seq 1 45); do
+    if compose exec -T penpot-postgres psql -U penpot -d penpot -c 'SELECT 1' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  print_error "penpot-postgres did not become ready"
+  return 1
+}
+
+create_penpot_local_user() {
+  if [ -z "${PENPOT_SETUP_EMAIL:-}" ]; then
+    return 0
+  fi
+  ensure_penpot_backend
+  if penpot_profile_exists "$PENPOT_SETUP_EMAIL"; then
+    print_info "Local Penpot user ${PENPOT_SETUP_EMAIL} already exists"
+    set_env_value PENPOT_LOCAL_EMAIL "$PENPOT_SETUP_EMAIL"
+    PENPOT_SETUP_PASSWORD=""
+    return 0
+  fi
+  if [ -z "${PENPOT_SETUP_PASSWORD:-}" ]; then
+    print_error "Cannot create ${PENPOT_SETUP_EMAIL}: password missing"
+    return 1
+  fi
+  print_step "Creating local Penpot user ${PENPOT_SETUP_EMAIL}..."
+  local i out rc
+  out=""
+  for i in $(seq 1 30); do
+    set +e
+    out="$(compose exec -T penpot-backend python3 manage.py create-profile \
+      -n "$PENPOT_SETUP_FULLNAME" \
+      -e "$PENPOT_SETUP_EMAIL" \
+      -p "$PENPOT_SETUP_PASSWORD" \
+      --skip-tutorial --skip-walkthrough 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      print_success "Created local Penpot user ${PENPOT_SETUP_EMAIL}"
+      set_env_value PENPOT_LOCAL_EMAIL "$PENPOT_SETUP_EMAIL"
+      PENPOT_SETUP_PASSWORD=""
+      return 0
+    fi
+    if echo "$out" | grep -qiE 'already exists|duplicate'; then
+      print_info "Local Penpot user ${PENPOT_SETUP_EMAIL} already exists"
+      set_env_value PENPOT_LOCAL_EMAIL "$PENPOT_SETUP_EMAIL"
+      PENPOT_SETUP_PASSWORD=""
+      return 0
+    fi
+    sleep 2
+  done
+  print_error "Failed to create local Penpot user"
+  echo "$out" >&2
+  return 1
+}
+
+prompt_provider_auth() {
+  local force="${1:-0}"
+  if [ "${SKIP_AUTH:-0}" = "1" ] || [ "${MMD_NONINTERACTIVE:-}" = "1" ]; then
+    print_info "Skipping provider auth prompt (MMD_NONINTERACTIVE or --skip-auth)"
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    print_info "Skipping provider auth prompt (no TTY). Run mmd auth later or set keys in ${STACK}/${ENV_FILE}."
+    return 0
+  fi
+  if [ "$force" != "1" ] && any_provider_key_set; then
+    print_info "Provider API key already set in ${ENV_FILE}"
+    return 0
+  fi
+
+  print_step "OpenDesign agent credentials..."
+  echo "Choose a provider to unlock at least one harness. Skip means no agent jobs until mmd auth."
+  local more="yes"
+  while [ "$more" = "yes" ]; do
+    echo ""
+    echo "  1) Cursor        → CURSOR_API_KEY → cursor-agent"
+    echo "  2) Anthropic     → ANTHROPIC_API_KEY → claude, opencode, pi"
+    echo "  3) OpenAI        → OPENAI_API_KEY → codex (then opencode, pi)"
+    echo "  4) Skip"
+    local choice=""
+    read -r -p "Provider [1-4]: " choice
+    case "$choice" in
+      1) _prompt_and_save_key CURSOR_API_KEY "Cursor API key" ;;
+      2) _prompt_and_save_key ANTHROPIC_API_KEY "Anthropic API key" ;;
+      3) _prompt_and_save_key OPENAI_API_KEY "OpenAI API key" ;;
+      4|"")
+        if ! any_provider_key_set; then
+          print_info "No provider key saved. OpenDesign agent jobs need mmd auth first."
+        fi
+        more="no"
+        continue
+        ;;
+      *)
+        print_error "Invalid choice"
+        continue
+        ;;
+    esac
+    local again=""
+    read -r -p "Add another provider? [y/N]: " again
+    case "$again" in
+      y|Y|yes|YES) more="yes" ;;
+      *) more="no" ;;
+    esac
+  done
+}
+
+_prompt_and_save_key() {
+  local key="$1"
+  local label="$2"
+  local value=""
+  while [ -z "$value" ]; do
+    read -r -s -p "${label}: " value
+    echo ""
+    if [ -z "$value" ]; then
+      print_error "Key cannot be empty"
+    fi
+  done
+  set_env_value "$key" "$value"
+  print_success "Saved ${key} to ${ENV_FILE}"
+}
+
+open_design_port() {
+  local port
+  port="$(grep '^OPEN_DESIGN_PORT=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
+  echo "${port:-7457}"
+}
+
+wait_open_design() {
+  local port
+  port="$(open_design_port)"
+  local i
+  for i in $(seq 1 45); do
+    if curl -sf "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  print_info "OpenDesign health not ready; skipping harness apply"
+  return 1
+}
+
+configure_harnesses() {
+  require_env
+  if ! wait_open_design; then
+    return 0
+  fi
+  print_step "Applying agent credentials to harnesses..."
+  local unlocked=0
+  if ! env_value_empty CURSOR_API_KEY; then
+    print_info "CURSOR_API_KEY set → cursor-agent (env is enough)"
+    unlocked=1
+  fi
+  if ! env_value_empty ANTHROPIC_API_KEY; then
+    print_info "ANTHROPIC_API_KEY set → claude, opencode, pi (env is enough)"
+    unlocked=1
+  fi
+  if ! env_value_empty OPENAI_API_KEY; then
+    print_info "OPENAI_API_KEY set → codex (then opencode, pi)"
+    unlocked=1
+    if compose exec -T open-design sh -c 'printenv OPENAI_API_KEY | codex login --with-api-key' >/dev/null 2>&1; then
+      print_success "codex login --with-api-key"
+    else
+      print_info "codex login --with-api-key failed (continuing)"
+    fi
+  fi
+  if [ "$unlocked" = "0" ]; then
+    print_info "No provider keys in ${ENV_FILE}. Run mmd auth before OpenDesign agent jobs."
+  fi
 }
 
 maybe_link_bin() {
@@ -126,8 +402,11 @@ Stack root: ${STACK}
   Override with MMD_STACK_ROOT.
 
 Lifecycle:
-  setup     Create penpot.env, generate secrets, pull Penpot, build OpenDesign
-  start     Start containers (builds OpenDesign if needed)
+  setup     Create penpot.env, generate secrets, local Penpot user, optional provider keys, pull Penpot, build OpenDesign
+            Flags: --skip-auth --skip-user
+            Env: MMD_NONINTERACTIVE=1 skips prompts; PENPOT_LOCAL_EMAIL + PENPOT_LOCAL_PASSWORD create the user without a TTY
+  start     Start containers (builds OpenDesign if needed), then apply harness logins
+  auth      Prompt for provider API keys, recreate open-design, apply harness logins
   stop      Stop containers
   down      Stop and remove containers (keep volumes)
   restart   Stop then start
@@ -136,25 +415,33 @@ Lifecycle:
 Ops:
   logs      Follow logs
   status    Show container status
-  update    Pull Penpot images, rebuild OpenDesign, recreate
+  update    Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins
   backup    Dump Postgres into backups/
-  doctor    OpenDesign health, agent CLIs, /api/agents
+  doctor    OpenDesign health, agent CLIs, runnable harness table
   convert   Figma → Penpot via figpot (needs .env in the stack root)
 
 URLs:
   Penpot UI:    http://localhost:9001
   MCP:          http://localhost:4401/mcp
   OpenDesign:   http://127.0.0.1:7457
-                Docker Desktop basic auth: user open-design, password = OD_API_TOKEN
   Mailcatcher:  http://localhost:1080
 
-Penpot UI: open http://localhost:9001, then File → MCP Server → Connect.
+Penpot UI: open http://localhost:9001. Activate the penpot-local MCP in Cursor.
 EOF
 }
 
 cmd_setup() {
   require_docker
   require_compose_file
+  SKIP_AUTH=0
+  SKIP_USER=0
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --skip-auth) SKIP_AUTH=1 ;;
+      --skip-user) SKIP_USER=1 ;;
+    esac
+  done
   print_step "=== Penpot + OpenDesign local setup ==="
   echo "Stack: ${STACK}"
   echo ""
@@ -176,11 +463,15 @@ cmd_setup() {
     ensure_env_key OPEN_DESIGN_MEM_LIMIT "4g"
     ensure_env_key OPEN_DESIGN_PORT "7457"
     ensure_env_key OD_CODEX_SANDBOX "danger-full-access"
+    ensure_env_key OPEN_DESIGN_DISABLE_API_AUTH "1"
     ensure_env_key OD_API_TOKEN ""
     ensure_env_key CURSOR_API_KEY ""
     ensure_env_key ANTHROPIC_API_KEY ""
     ensure_env_key OPENAI_API_KEY ""
+    ensure_env_key PENPOT_LOCAL_EMAIL ""
   fi
+
+  ensure_env_key OPEN_DESIGN_DISABLE_API_AUTH "1"
 
   if [ ! -f .env ] && [ -f .env.example ]; then
     cp .env.example .env
@@ -206,6 +497,12 @@ cmd_setup() {
   fi
   echo ""
 
+  prompt_penpot_local_user
+  echo ""
+
+  prompt_provider_auth 0
+  echo ""
+
   print_step "Pulling Penpot Docker images..."
   compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
     penpot-postgres penpot-valkey penpot-mailcatch
@@ -217,33 +514,52 @@ cmd_setup() {
   print_success "OpenDesign image built"
   echo ""
 
+  create_penpot_local_user
+  echo ""
+
   maybe_link_bin
 
   print_success "=== Setup complete ==="
   echo ""
   print_info "Next:"
-  echo "  1. Fill CURSOR_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY in ${STACK}/${ENV_FILE} if you will run agent jobs"
-  echo "  2. mmd start"
-  echo "  3. Open http://localhost:9001 and create the first user"
-  echo "  4. OpenDesign UI: http://127.0.0.1:7457"
-  echo "     Docker Desktop basic auth: username open-design, password = OD_API_TOKEN"
-  echo "  5. mmd doctor"
-  echo "  6. Install Penpot Desktop: https://github.com/author-more/penpot-desktop"
-  echo "  7. File → MCP Server → Connect in the open file"
-  echo "  8. Point Cursor at http://localhost:4401/mcp (penpot-local)"
+  if any_provider_key_set; then
+    echo "  1. mmd start  (applies keys to harnesses)"
+  else
+    echo "  1. mmd auth   (or mmd start after you add keys — no runnable harness yet)"
+  fi
+  if [ -n "${PENPOT_SETUP_EMAIL:-}" ]; then
+    echo "  2. Open http://localhost:9001 and log in as ${PENPOT_SETUP_EMAIL}"
+  else
+    echo "  2. Open http://localhost:9001"
+  fi
+  echo "  3. OpenDesign UI: http://127.0.0.1:7457"
+  echo "  4. mmd doctor"
+  echo "  5. Activate the penpot-local MCP in Cursor"
+}
+
+cmd_auth() {
+  require_docker
+  require_compose_file
+  require_env
+  SKIP_AUTH=0
+  prompt_provider_auth 1
+  echo "Recreating open-design so Compose picks up ${ENV_FILE}..."
+  compose up -d --force-recreate open-design
+  configure_harnesses
 }
 
 cmd_start() {
   require_compose_file
   require_env
   if [ -z "$(docker images -q penpotapp/frontend 2>/dev/null || true)" ]; then
-    cmd_setup
+    cmd_setup "$@"
   fi
   echo "Starting Penpot and OpenDesign..."
   compose up --remove-orphans --build --detach
   echo "Penpot:     http://localhost:9001"
   echo "MCP:        http://localhost:4401/mcp"
   echo "OpenDesign: http://127.0.0.1:7457"
+  configure_harnesses
   echo "Check status with 'mmd status'"
 }
 
@@ -281,6 +597,7 @@ cmd_update() {
     penpot-postgres penpot-valkey penpot-mailcatch
   compose up --remove-orphans --build --detach
   echo "Penpot and OpenDesign updated and restarted"
+  configure_harnesses
 }
 
 cmd_backup() {
@@ -297,17 +614,75 @@ cmd_doctor() {
   require_compose_file
   require_env
   local port token
-  port="$(grep '^OPEN_DESIGN_PORT=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
-  port="${port:-7457}"
+  port="$(open_design_port)"
   echo "OpenDesign health..."
   curl -sf "http://127.0.0.1:${port}/api/health"
   echo ""
   echo "CLI binaries inside the container..."
   compose exec -T open-design sh -c 'command -v cursor-agent && command -v claude && command -v codex && command -v opencode && command -v pi'
-  echo "GET /api/agents (Bearer OD_API_TOKEN)..."
-  token="$(grep '^OD_API_TOKEN=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2-)"
-  curl -sf -H "Authorization: Bearer ${token}" "http://127.0.0.1:${port}/api/agents"
   echo ""
+  echo "Runnable harnesses (PATH + credentials; not daemon authStatus)..."
+  token="$(grep '^OD_API_TOKEN=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2-)"
+  python3 - "$STACK/${ENV_FILE}" "$token" "$port" <<'PY'
+import json, pathlib, sys, urllib.request
+
+env_path = pathlib.Path(sys.argv[1])
+token = sys.argv[2]
+port = sys.argv[3]
+file_env = {}
+for line in env_path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    k, _, v = line.partition("=")
+    file_env[k.strip()] = v.strip().strip("'").strip('"')
+
+creds = {
+    "CURSOR_API_KEY": bool(file_env.get("CURSOR_API_KEY", "").strip()),
+    "ANTHROPIC_API_KEY": bool(file_env.get("ANTHROPIC_API_KEY", "").strip()),
+    "OPENAI_API_KEY": bool(file_env.get("OPENAI_API_KEY", "").strip()),
+}
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/api/agents",
+    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+)
+with urllib.request.urlopen(req, timeout=15) as resp:
+    payload = json.loads(resp.read().decode("utf-8"))
+agents = payload.get("agents") or []
+path_ids = []
+for item in agents:
+    if not isinstance(item, dict):
+        continue
+    ident = str(item.get("id") or "").strip()
+    if ident and item.get("available") is not False:
+        path_ids.append(ident)
+
+def runnable(ident: str) -> tuple[bool, str]:
+    on_path = ident in path_ids
+    if not on_path:
+        return False, "not on PATH"
+    if ident == "cursor-agent":
+        return (True, "CURSOR_API_KEY") if creds["CURSOR_API_KEY"] else (False, "needs CURSOR_API_KEY")
+    if ident == "claude":
+        return (True, "ANTHROPIC_API_KEY") if creds["ANTHROPIC_API_KEY"] else (False, "needs ANTHROPIC_API_KEY")
+    if ident == "codex":
+        return (True, "OPENAI_API_KEY") if creds["OPENAI_API_KEY"] else (False, "needs OPENAI_API_KEY")
+    if ident in ("opencode", "byok-opencode"):
+        if creds["ANTHROPIC_API_KEY"] or creds["OPENAI_API_KEY"]:
+            return True, "ANTHROPIC or OPENAI key"
+        return False, "needs ANTHROPIC_API_KEY or OPENAI_API_KEY"
+    if ident == "pi":
+        if creds["ANTHROPIC_API_KEY"] or creds["OPENAI_API_KEY"]:
+            return True, "ANTHROPIC or OPENAI key"
+        return False, "needs ANTHROPIC_API_KEY or OPENAI_API_KEY"
+    return False, "not a configured harness"
+
+print(f"{'id':16} {'path':5} {'runnable':8} reason")
+for ident in ("cursor-agent", "claude", "codex", "opencode", "byok-opencode", "pi"):
+    ok, reason = runnable(ident)
+    on = "yes" if ident in path_ids else "no"
+    print(f"{ident:16} {on:5} {'yes' if ok else 'no':8} {reason}")
+PY
 }
 
 cmd_destroy() {
@@ -345,6 +720,7 @@ main() {
   case "$cmd" in
     help|-h|--help) cmd_help ;;
     setup) cmd_setup "$@" ;;
+    auth) cmd_auth "$@" ;;
     start|serve) cmd_start "$@" ;;
     stop) cmd_stop "$@" ;;
     down|clean) cmd_down "$@" ;;

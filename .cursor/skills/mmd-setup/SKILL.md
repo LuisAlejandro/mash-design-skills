@@ -45,9 +45,10 @@ Do not copy Compose into the app.
 
 | User intent | Command |
 | --- | --- |
-| First time / missing `penpot.env` | `"$MMD" setup` |
+| First time / missing `penpot.env` | `"$MMD" setup` (prompts for a local Penpot user and provider keys on a TTY; `--skip-user` / `--skip-auth` or `MMD_NONINTERACTIVE=1` skips) |
+| Add or change provider keys | `"$MMD" auth` then wait for harness apply |
 | Daemon or Penpot down | `"$MMD" start` |
-| Health + five CLIs + `/api/agents` | `"$MMD" doctor` |
+| Health + CLIs + runnable table | `"$MMD" doctor` |
 | Pause | `"$MMD" stop` |
 | Remove containers, keep volumes | `"$MMD" down` |
 | Wipe this stack’s volumes | `"$MMD" destroy` (confirm first) |
@@ -57,11 +58,10 @@ Never run `docker system prune` against the whole machine.
 ## After start
 
 1. Confirm `GET http://127.0.0.1:7457/api/health` and `mmd doctor`.
-2. Penpot UI: http://localhost:9001 — create the first user if needed.
+2. Penpot UI: http://localhost:9001 — log in with the local user from `mmd setup`.
 3. If port 7457 is busy, tell the user that port is taken. The host Open Design desktop app uses 7456; this stack uses 7457.
-4. In the Penpot UI at http://localhost:9001, open a file → **File → MCP Server → Connect**.
-5. Cursor MCP: `penpot-local` (project `.cursor/mcp.json`) or `user-penpot-local` (user config). Both are valid. URL `http://localhost:4401/mcp`.
-6. Optional agent jobs: fill `CURSOR_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `$STACK/penpot.env`, then `"$MMD" start` again.
+4. Activate the `penpot-local` MCP in Cursor (`user-penpot-local` is the same snippet in `~/.cursor/mcp.json`).
+5. Agent jobs: `"$MMD" setup` or `"$MMD" auth` writes provider keys to `$STACK/penpot.env`. `"$MMD" start` applies them. Do not hand-edit the toolkit clone `penpot.env` and expect Compose to see it.
 
 ## Funnel skills
 

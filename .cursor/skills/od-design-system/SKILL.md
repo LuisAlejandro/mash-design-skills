@@ -17,7 +17,7 @@ Use this skill to create the OpenDesign design-system package that later feeds `
 
 The workflow first ensures the source folder has a high-quality root `DESIGN.md`. Phase 0 always runs: when `DESIGN.md` exists, improve it for accuracy, specificity, and missing sections; when it does not exist, generate it from the implemented frontend using [`phase-0-extract-design-system.md`](phase-0-extract-design-system.md). Phase 1 and later always receive that `DESIGN.md`, create an OpenDesign draft with the root `DESIGN.md` as `body`, open the agent-managed design-system workspace, run workspace generation through OpenDesign `/api/runs` on the Compose daemon, audit the package through the daemon endpoint, optionally apply one revision, publish the draft, copy the generated workspace package to `rosey/design-system` via HTTP, and write an async manifest.
 
-Talk to the daemon at `http://127.0.0.1:7457` only. Never spawn a host `opendesign` process. Never merge host `~/.config/opencode/opencode.json`. The workspace agent is picked by `od_daemon.py pick-agent` unless you pass `agentId`.
+Talk to the daemon at `http://127.0.0.1:7457` only. Never spawn a host `opendesign` process. Never merge host `~/.config/opencode/opencode.json`. The workspace agent is picked by `od_daemon.py pick-agent`. Set `OPEN_DESIGN_RUN_AGENT` to force `opencode` or `pi` when that harness is on PATH and authenticated.
 
 ## Interaction Mode
 
@@ -47,8 +47,9 @@ Ask for or infer:
 - `provenanceNotes`: optional additional provenance notes for OpenDesign metadata.
 - `revisionFeedback`: optional feedback to apply after draft creation.
 - `sectionTitle`: optional target section for revision feedback.
-- `agentId`: optional workspace generation agent. When omitted, run `python3 .agents/shared/lib/od_daemon.py pick-agent` (`OPEN_DESIGN_RUN_AGENT`, else `cursor-agent` if `CURSOR_API_KEY` is set, then `claude`, `opencode`, `pi`).
 - `daemonUrl`: optional override. Default is `OPEN_DESIGN_DAEMON_URL` or `http://127.0.0.1:7457`.
+
+Workspace generation agent: run `python3 .agents/shared/lib/od_daemon.py pick-agent`. Default is `cursor-agent` if `CURSOR_API_KEY` is set, then `claude` if Anthropic, then `codex` if OpenAI. `OPEN_DESIGN_RUN_AGENT` can force `opencode` or `pi` when that harness is on PATH **and** has matching Anthropic or OpenAI credentials. Unauthenticated OpenCode is not a default. If nothing is runnable, stop and tell the user to run `mmd auth` then `mmd start`.
 
 ## Workflow
 
@@ -93,9 +94,7 @@ test -d "$SOURCE_DIR"
 test -f "$SOURCE_DIR/DESIGN.md"
 echo "Source DESIGN.md: present; draft will use it"
 
-if [ -z "${AGENT_ID:-}" ]; then
-  AGENT_ID="$(python3 "${REPO}/.agents/shared/lib/od_daemon.py" pick-agent)"
-fi
+AGENT_ID="$(python3 "${REPO}/.agents/shared/lib/od_daemon.py" pick-agent)"
 DAEMON="$OD_DAEMON_URL"
 ```
 
@@ -284,14 +283,12 @@ od_curl --max-time 30 -X POST "$DAEMON/api/projects/$PROJECT_ID/files" \
   | jq -e '.file' >/dev/null
 ```
 
-Run package generation before copying through the same `/api/runs` path used by the OpenDesign UI. Unless the user passed `agentId`, pick the agent with `od_daemon.py pick-agent`. OpenDesign agents run in the Compose container; do not edit host OpenCode config.
+Run package generation before copying through the same `/api/runs` path used by the OpenDesign UI. Pick the agent with `od_daemon.py pick-agent` (`OPEN_DESIGN_RUN_AGENT` can force `opencode` or `pi` when runnable). OpenDesign agents run in the Compose container; do not edit host OpenCode config.
 
 ````bash
 test -n "$PROJECT_ID"
 
-if [ -z "${AGENT_ID:-}" ]; then
-  AGENT_ID="$(python3 "${REPO}/.agents/shared/lib/od_daemon.py" pick-agent)"
-fi
+AGENT_ID="$(python3 "${REPO}/.agents/shared/lib/od_daemon.py" pick-agent)"
 MODEL="${MODEL:-}"
 
 GENERATION_PROMPT=$(cat <<'EOF'
