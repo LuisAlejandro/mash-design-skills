@@ -1,14 +1,13 @@
 penpot.env
 .env
 node_modules/
-package.json
-package-lock.json
 .playwright/
 .npm-global/
 backups/*.sql
 .figpot-mapping.json
-autoinstall.list
 __pycache__/
 *.py[cod]
 *$py.class
 pipeline-smoke/
+rosey/
+.cursor/penpot-implement-state-*.json

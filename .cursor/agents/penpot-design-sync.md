@@ -29,11 +29,16 @@ You apply **code fixes** so the live UI matches Penpot. You do not re-implement 
 Validate the sync report:
 
 ```bash
-node .cursor/skills/penpot-implement-design/scripts/parity/validate-agent-report.js \
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+
+node "${SKILLS}/penpot-implement-design/scripts/parity/validate-agent-report.js \
   --type sync --report <cycle-sync-report-path>
 ```
 
-Schema: `.cursor/agents/penpot-sync-report.schema.json`.
+Schema: `${OD_AGENTS_ROOT:-$HOME/.cursor/agents}/penpot-sync-report.schema.json`.
 
 ## Output
 

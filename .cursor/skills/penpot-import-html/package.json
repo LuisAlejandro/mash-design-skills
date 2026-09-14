@@ -1,0 +1,13 @@
+{
+  "name": "penpot-import-html",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Parse winner HTML/CSS into an internal layout JSON for Penpot import",
+  "scripts": {
+    "test": "node --test scripts/tests/*.test.js"
+  },
+  "dependencies": {
+    "node-html-parser": "^7.1.0"
+  }
+}

@@ -28,7 +28,11 @@ For fills, gradients, strokes, shadows, text, resize, and error handling, read `
 ## Prerequisites
 
 ```bash
-npm install --prefix .cursor/skills/penpot-import-html
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+npm install --prefix "${SKILLS}/penpot-import-html"
 ```
 
 Penpot MCP connected; target file open in the plugin.
@@ -38,15 +42,18 @@ Penpot MCP connected; target file open in the plugin.
 ### Step 1: Parse HTML into layout JSON
 
 ```bash
-REPO="$(git rev-parse --show-toplevel)"
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
 PAGE_SLUG="<page-slug>"
-HTML="${REPO}/rosey/designs/${PAGE_SLUG}/source/index.html"
-OUT="${REPO}/rosey/designs/${PAGE_SLUG}/penpot-import/layout.json"
+HTML="${APP}/rosey/designs/${PAGE_SLUG}/source/index.html"
+OUT="${APP}/rosey/designs/${PAGE_SLUG}/penpot-import/layout.json"
 
-node "${REPO}/.cursor/skills/penpot-import-html/scripts/html-to-layout.js" \
+node "${SKILLS}/penpot-import-html/scripts/html-to-layout.js" \
   --html "$HTML" \
   --page-slug "$PAGE_SLUG" \
-  --project-root "$REPO" \
+  --project-root "$APP" \
   --assets-dir "$(dirname "$HTML")" \
   --out "$OUT"
 ```
@@ -70,9 +77,9 @@ Store `storage.pageId` and `storage.pageSlug` (`meta.slug`). Subsequent `execute
 Generate execute_code scripts from `layout.json` (do not invent token loops):
 
 ```bash
-node "${REPO}/.cursor/skills/penpot-import-html/scripts/render/build-execute-code.js" \
+node "${SKILLS}/penpot-import-html/scripts/render/build-execute-code.js" \
   --layout "$OUT" \
-  --out-dir "${REPO}/rosey/designs/${PAGE_SLUG}/penpot-import/execute-code"
+  --out-dir "${APP}/rosey/designs/${PAGE_SLUG}/penpot-import/execute-code"
 ```
 
 Run via MCP `execute_code`, in order:

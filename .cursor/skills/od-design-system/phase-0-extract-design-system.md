@@ -22,7 +22,7 @@ Infer unless the user says otherwise:
 Confirm the source exists and identify the app root:
 
 ```bash
-SOURCE_DIR="${SOURCE_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)}"
+SOURCE_DIR="${SOURCE_DIR:-$(pwd -P)}"
 test -d "$SOURCE_DIR"
 ```
 

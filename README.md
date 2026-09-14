@@ -1,6 +1,6 @@
 # MMD Skills
 
-Local design-to-code toolkit for Cursor. [OpenDesign](https://github.com/nexu-io/open-design) explores HTML. [Penpot](https://penpot.app) is the canonical file. Penpot implement ships code. This repo is not an application; you install the skills into **your app** and run Penpot + OpenDesign as a machine-local Docker stack.
+Local design-to-code toolkit for Cursor. [OpenDesign](https://github.com/nexu-io/open-design) explores HTML. [Penpot](https://penpot.app) is the canonical file. Penpot implement ships code. This repo is not an application; you install the skills **once on this machine** and run Penpot + OpenDesign as a machine-local Docker stack. Design artifacts stay in **your app** (`rosey/`). This project's files are MIT ([LICENSE](LICENSE)); third-party stack pieces are listed in [NOTICE](NOTICE).
 
 ```text
 od-design-system? → od-design-candidates → [pick winner]
@@ -18,30 +18,38 @@ Skip `od-design-system` when `rosey/design-system/DESIGN.md` or `rosey/designs/d
 - Docker and Docker Compose v2
 - Node.js / Python 3 for skill scripts (the installer runs `npm install` and a candidates venv)
 
-## Install into your app
+## Install (once per machine)
 
-From the **app** repository, not this clone:
+From this toolkit clone:
 
 ```bash
 git clone <this-repo> /path/to/mmd-skills
-cd /path/to/my-app
 /path/to/mmd-skills/install.sh
 ```
 
-That copies the Cursor skill pack and review agents into `.cursor/`, merges MCP `penpot-local` → `http://localhost:4401/mcp`, writes `rosey/mmd-skills.json`, and syncs the Compose stack to `~/.local/share/mmd-skills` (override with `MMD_STACK_ROOT`). It starts the stack unless OpenDesign already answers `/api/health`.
+That copies the Cursor skill pack into `~/.cursor/skills`, review agents into `~/.cursor/agents`, merges MCP `penpot-local` → `http://localhost:4401/mcp` and Context7 → `https://mcp.context7.com/mcp` into `~/.cursor/mcp.json`, and syncs the Compose stack to `~/.local/share/mmd-skills` (override with `MMD_STACK_ROOT`). It starts the stack unless OpenDesign already answers `/api/health`.
 
-Do not run `install.sh` inside this toolkit clone.
+Then open **your app** in Cursor. Skills are already on this machine. Funnel output still lands in the app under `rosey/`.
 
-Re-run `install.sh` to update. Flags: `--check`, `--no-stack`, `--no-start`, `--no-agents`. Batch: copy `autoinstall.list.example` to `autoinstall.list` and run `./autoinstall.sh`.
+Re-run `install.sh` to update. Flags: `--check`, `--no-stack`, `--no-start`, `--no-agents`.
 
 ## After install
 
 1. Open [http://localhost:9001](http://localhost:9001) and log in with the local user from `mmd setup`. Activate the **penpot-local** MCP in Cursor.
 2. Compose OpenDesign uses port `7457` so it does not collide with a host Open Design app on `7456`.
-3. Cursor uses project MCP `penpot-local`, or the same snippet in `~/.cursor/mcp.json` as `user-penpot-local`. Both names work. See [MCP-SETUP.md](MCP-SETUP.md).
+3. See [MCP](#mcp) for `penpot-local`, Context7, and the Penpot plugin connect step.
 4. `mmd setup` prompts for a **local Penpot** email/password (not penpot.app) and for a provider API key (Cursor / Anthropic / OpenAI). It writes the **stack** `penpot.env` (email only; password is not stored). Use `mmd auth` later for keys. Scripted installs: `MMD_NONINTERACTIVE=1` with `PENPOT_LOCAL_EMAIL` and `PENPOT_LOCAL_PASSWORD`, or `--skip-user` / `--skip-auth`. `mmd start` applies keys to harnesses. `pick-agent` only selects a harness that is on PATH and has matching credentials.
 
 OpenDesign UI: [http://127.0.0.1:7457](http://127.0.0.1:7457). Mailcatcher: [http://localhost:1080](http://localhost:1080).
+
+## MCP
+
+`install.sh` merges both servers into `~/.cursor/mcp.json`:
+
+- `penpot-local` → `http://localhost:4401/mcp` (`user-penpot-local` is the same snippet). Skills accept either name.
+- `context7` → `https://mcp.context7.com/mcp` for library docs some skills may use. That server is part of this pack.
+
+HTTP `:4401` is not enough. In Penpot, open the file and use **File → MCP Server → Connect**. Import never draws a board without the plugin on an open file.
 
 ## Stack CLI (`mmd`)
 
@@ -55,7 +63,8 @@ No Make. From a clone: `./bin/mmd <command>`. After install, `mmd` may be on `PA
 | `mmd stop` | Stop containers |
 | `mmd down` | Stop and remove containers (keep volumes) |
 | `mmd restart` | Stop then start |
-| `mmd destroy` | Remove this project's containers, images, and volumes (asks first) |
+| `mmd destroy` | Remove this project's containers, images, and volumes (asks first). Does not uninstall the CLI or skills |
+| `mmd uninstall` | Destroy the Compose project, then remove `~/.local/bin/mmd`, `~/.local/share/mmd-skills`, and the managed pack in `~/.cursor/skills` and `~/.cursor/agents`. Keeps `rosey/` |
 | `mmd logs` | Follow logs |
 | `mmd status` | `compose ps` |
 | `mmd update` | Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins |
@@ -79,13 +88,15 @@ If the daemon is down, invoke the **mmd-setup** skill or run `mmd start`. Do not
 
 | Path | Role |
 | --- | --- |
-| `install.sh` | Copy skills into an app; sync/start the machine stack |
+| `install.sh` | Copy skills/agents to `~/.cursor`; sync/start the machine stack |
 | `bin/mmd` | Stack lifecycle (no Make) |
 | `docker-compose.yaml` | Official Penpot compose plus `open-design` on `127.0.0.1:7457` and MCP on `4401` |
 | `docker/opendesign/` | Image: `ghcr.io/nexu-io/od` plus Linux `cursor-agent`, `claude`, `codex`, `opencode`, `pi` |
-| `.cursor/skills/` | Funnel skills (source pack) |
-| `.agents/shared/lib/` | Harness-agnostic OpenDesign daemon helpers (copied into the app) |
-| `mcp.json.example` | Cursor snippet: `http://localhost:4401/mcp` |
+| `.cursor/skills/` | Funnel skills (source pack; installer copies to `~/.cursor/skills`) |
+| `.agents/shared/lib/` | OpenDesign daemon helpers (installer copies to the stack `lib/`) |
+| `.cursor/mcp.json` | Tracked Cursor MCP: Context7 + `penpot-local` |
+| `mcp.json.example` | Same snippet for hand-merging into `~/.cursor/mcp.json` |
+| `LICENSE` / `NOTICE` | MIT for this repo; third-party attribution |
 | `penpot.env.example` | Instance version, public URI, OpenDesign token and API keys |
 
 Do not commit `penpot.env` or `.env`.

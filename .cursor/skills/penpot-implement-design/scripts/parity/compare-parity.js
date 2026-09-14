@@ -10,7 +10,7 @@ const { compareScreenshotPair } = require("./lib/pixel-diff");
 const { gotoReady } = require("./lib/playwright-nav");
 
 function skillsPrefix() {
-  return ".cursor/skills/penpot-implement-design";
+  return path.resolve(__dirname, "..", "..");
 }
 
 function parseArgs(argv) {

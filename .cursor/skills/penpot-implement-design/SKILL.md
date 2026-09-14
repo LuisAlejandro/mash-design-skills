@@ -94,7 +94,7 @@ Call the Penpot MCP **execute_code** tool with the script in `scripts/serialize-
 
 **Resolve tokens (separate step):**
 
-After the script above returns, read the `penpot-token-resolution` skill (`.cursor/skills/penpot-token-resolution/SKILL.md`) and follow its **shape** mode. The token names are already in `storage.tokenNamesToResolve`. Run the shape execute_code script from that skill. It returns `{ resolvedTokens, failedTokens }`. Merge these into the design context results from above.
+After the script above returns, read the `penpot-token-resolution` skill and follow its **shape** mode. The token names are already in `storage.tokenNamesToResolve`. Run the shape execute_code script from that skill. It returns `{ resolvedTokens, failedTokens }`. Merge these into the design context results from above.
 
 **Persist the target shape ID:** After the script above returns successfully, write the target shape ID and page context to `.cursor/penpot-implement-state-<shapeId>.json` (where `<shapeId>` is the target shape's UUID) so it survives MCP reconnections (which clear `storage`). Each shape gets its own state file, enabling concurrent implementations in different chat windows.
 

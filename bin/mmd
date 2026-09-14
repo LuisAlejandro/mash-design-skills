@@ -381,6 +381,34 @@ configure_harnesses() {
   if [ "$unlocked" = "0" ]; then
     print_info "No provider keys in ${ENV_FILE}. Run mmd auth before OpenDesign agent jobs."
   fi
+  seed_opendesign_studio
+}
+
+od_daemon_py() {
+  if [ -f "${STACK}/lib/od_daemon.py" ]; then
+    echo "${STACK}/lib/od_daemon.py"
+  elif [ -f "${STACK}/.agents/shared/lib/od_daemon.py" ]; then
+    echo "${STACK}/.agents/shared/lib/od_daemon.py"
+  fi
+}
+
+seed_opendesign_studio() {
+  local helper=""
+  helper="$(od_daemon_py)"
+  if [ -z "$helper" ]; then
+    print_info "Skipping OpenDesign studio seed (od_daemon.py not in the stack)"
+    return 0
+  fi
+  local out rc
+  set +e
+  out="$(python3 "$helper" seed-studio --stack-root "$STACK" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    print_success "OpenDesign studio: skipped onboarding, agent ${out}"
+  else
+    print_info "OpenDesign studio: ${out}"
+  fi
 }
 
 maybe_link_bin() {
@@ -405,12 +433,17 @@ Lifecycle:
   setup     Create penpot.env, generate secrets, local Penpot user, optional provider keys, pull Penpot, build OpenDesign
             Flags: --skip-auth --skip-user
             Env: MMD_NONINTERACTIVE=1 skips prompts; PENPOT_LOCAL_EMAIL + PENPOT_LOCAL_PASSWORD create the user without a TTY
-  start     Start containers (builds OpenDesign if needed), then apply harness logins
+  start     Start containers (builds OpenDesign if needed), then apply harness logins and seed the OpenDesign studio
   auth      Prompt for provider API keys, recreate open-design, apply harness logins
   stop      Stop containers
   down      Stop and remove containers (keep volumes)
   restart   Stop then start
-  destroy   Remove this project's containers, images, and volumes (asks first)
+  destroy   Remove this project's containers, images, and volumes (asks first).
+            Does not uninstall the CLI, stack dir, or user skill pack.
+  uninstall Destroy the Compose project, then remove ~/.local/bin/mmd,
+            ~/.local/share/mmd-skills, and the managed pack in
+            ~/.cursor/skills and ~/.cursor/agents. Keeps rosey/.
+            Env: MMD_CONFIRM_UNINSTALL=1 skips the prompt
 
 Ops:
   logs      Follow logs
@@ -705,6 +738,196 @@ cmd_destroy() {
   echo "Project destroyed."
 }
 
+is_toolkit_root() {
+  local d="$1"
+  [ -n "$d" ] && [ -f "$d/install.sh" ] && [ -f "$d/bin/mmd" ] && [ -f "$d/docker-compose.yaml" ] \
+    && [ -d "$d/.cursor/skills/mmd-setup" ]
+}
+
+rm_if_exists() {
+  local path="$1"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    rm -rf "$path"
+    print_info "Removed $path"
+  fi
+}
+
+destroy_compose_at() {
+  local root="$1"
+  if [ ! -f "$root/docker-compose.yaml" ]; then
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    print_info "Docker not found; skipping compose destroy in $root"
+    return 0
+  fi
+  print_step "Destroying Compose project in $root (containers, images, volumes)..."
+  set +e
+  if [ -f "$root/penpot.env" ]; then
+    docker compose -p "$PROJECT_NAME" -f "$root/docker-compose.yaml" \
+      --env-file "$root/penpot.env" --project-directory "$root" \
+      down --rmi all --remove-orphans --volumes
+  else
+    docker compose -p "$PROJECT_NAME" -f "$root/docker-compose.yaml" \
+      --project-directory "$root" down --rmi all --remove-orphans --volumes
+  fi
+  set -e
+  return 0
+}
+
+remove_user_penpot_mcp() {
+  local dest="${HOME}/.cursor/mcp.json"
+  if [ ! -f "$dest" ] || ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  python3 - "$dest" <<'MCP'
+import json
+import sys
+from pathlib import Path
+
+dest = Path(sys.argv[1])
+try:
+    data = json.loads(dest.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
+servers = data.get("mcpServers")
+if not isinstance(servers, dict):
+    sys.exit(0)
+
+canonical = {
+    "penpot-local": "http://localhost:4401/mcp",
+    "context7": "https://mcp.context7.com/mcp",
+}
+removed = []
+for name, expected_url in canonical.items():
+    if name not in servers:
+        continue
+    entry = servers.get(name)
+    url = entry.get("url") if isinstance(entry, dict) else None
+    if url != expected_url:
+        continue
+    del servers[name]
+    removed.append(name)
+
+if not removed:
+    sys.exit(0)
+dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+print(" ".join(removed))
+MCP
+}
+
+cmd_uninstall() {
+  # Keep these lists in sync with MANAGED_SKILLS / MANAGED_AGENTS in install.sh.
+  local managed_skills=(
+    mmd-setup
+    od-design-candidates
+    od-design-system
+    penpot-analyze-code-for-design
+    penpot-apply-design-updates
+    penpot-create-design-system
+    penpot-design-pipeline
+    penpot-implement-design
+    penpot-import-html
+    penpot-sync-code-to-design
+    penpot-token-resolution
+    _shared
+  )
+  local managed_agents=(
+    penpot-design-iterator.md
+    penpot-design-reviewer.md
+    penpot-design-sync.md
+    penpot-iterator-report.schema.json
+    penpot-reviewer-report.schema.json
+    penpot-sync-report.schema.json
+  )
+  local share_stack="${HOME}/.local/share/mmd-skills"
+  local bin_link="${HOME}/.local/bin/mmd"
+  local skills_root="${MMD_SKILLS_ROOT:-${HOME}/.cursor/skills}"
+  local agents_root="${HOME}/.cursor/agents"
+  local name toolkit_guess agents_guess out
+
+  if [ -z "${HOME:-}" ] || [ ! -d "$HOME" ]; then
+    print_error "HOME is not set"
+    exit 1
+  fi
+  case "$share_stack" in
+    /|"$HOME")
+      print_error "Refusing to delete $share_stack"
+      exit 1
+      ;;
+  esac
+
+  if [ "$#" -gt 0 ]; then
+    print_error "Unknown uninstall flag: $1"
+    exit 1
+  fi
+
+  echo ""
+  echo "WARNING!!!"
+  echo "This will destroy the Penpot Compose project (containers, images, volumes)"
+  echo "and remove the MMD Skills machine install:"
+  echo "  $bin_link"
+  echo "  $share_stack"
+  echo "  managed skills under $skills_root"
+  echo "  managed agents under $agents_root"
+  echo "Keeps rosey/ and other ~/.cursor skills/agents."
+  echo ""
+  if [ "${MMD_CONFIRM_UNINSTALL:-}" = "1" ] || [ "${MMD_CONFIRM_DESTROY:-}" = "1" ]; then
+    :
+  elif [ -t 0 ]; then
+    read -r -p "Press ctrl+c to abort or enter to continue." -n 1 || true
+    echo ""
+  else
+    print_error "Refusing uninstall without a TTY. Set MMD_CONFIRM_UNINSTALL=1 to proceed."
+    exit 1
+  fi
+
+  destroy_compose_at "$STACK"
+  if [ "$STACK" != "$share_stack" ]; then
+    destroy_compose_at "$share_stack"
+  fi
+
+  toolkit_guess="$(cd "$skills_root/../.." 2>/dev/null && pwd -P || true)"
+  if [ -n "$toolkit_guess" ] && is_toolkit_root "$toolkit_guess"; then
+    print_info "Skipping toolkit clone skills under $skills_root"
+  else
+    for name in "${managed_skills[@]}"; do
+      rm_if_exists "$skills_root/$name"
+    done
+  fi
+
+  agents_guess="$(cd "$agents_root/../.." 2>/dev/null && pwd -P || true)"
+  if [ -n "$agents_guess" ] && is_toolkit_root "$agents_guess"; then
+    print_info "Skipping toolkit clone agents under $agents_root"
+  else
+    for name in "${managed_agents[@]}"; do
+      rm_if_exists "$agents_root/$name"
+    done
+  fi
+
+  out="$(remove_user_penpot_mcp || true)"
+  case " $out " in
+    *" penpot-local "*) print_info "Removed penpot-local from ~/.cursor/mcp.json" ;;
+  esac
+  case " $out " in
+    *" context7 "*) print_info "Removed context7 from ~/.cursor/mcp.json" ;;
+  esac
+
+  rm_if_exists "$bin_link"
+  if [ -e "$share_stack" ] || [ -L "$share_stack" ]; then
+    if is_toolkit_root "$share_stack"; then
+      print_info "Skipping toolkit clone at $share_stack"
+    else
+      rm -rf "$share_stack"
+      print_info "Removed $share_stack"
+    fi
+  fi
+
+  print_success "MMD Skills uninstalled"
+}
+
 cmd_convert() {
   require_compose_file
   if [ ! -f "${STACK}/convert.sh" ]; then
@@ -731,6 +954,7 @@ main() {
     backup) cmd_backup "$@" ;;
     doctor|od-smoke) cmd_doctor "$@" ;;
     destroy) cmd_destroy "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
     convert) cmd_convert "$@" ;;
     *)
       print_error "Unknown command: $cmd"

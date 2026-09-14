@@ -49,7 +49,7 @@ Ask for or infer:
 - `sectionTitle`: optional target section for revision feedback.
 - `daemonUrl`: optional override. Default is `OPEN_DESIGN_DAEMON_URL` or `http://127.0.0.1:7457`.
 
-Workspace generation agent: run `python3 .agents/shared/lib/od_daemon.py pick-agent`. Default is `cursor-agent` if `CURSOR_API_KEY` is set, then `claude` if Anthropic, then `codex` if OpenAI. `OPEN_DESIGN_RUN_AGENT` can force `opencode` or `pi` when that harness is on PATH **and** has matching Anthropic or OpenAI credentials. Unauthenticated OpenCode is not a default. If nothing is runnable, stop and tell the user to run `mmd auth` then `mmd start`.
+Workspace generation agent: run `python3 "${STACK}/lib/od_daemon.py" pick-agent`. Default is `cursor-agent` if `CURSOR_API_KEY` is set, then `claude` if Anthropic, then `codex` if OpenAI. `OPEN_DESIGN_RUN_AGENT` can force `opencode` or `pi` when that harness is on PATH **and** has matching Anthropic or OpenAI credentials. Unauthenticated OpenCode is not a default. If nothing is runnable, stop and tell the user to run `mmd auth` then `mmd start`.
 
 ## Workflow
 
@@ -58,7 +58,7 @@ Workspace generation agent: run `python3 .agents/shared/lib/od_daemon.py pick-ag
 Resolve `SOURCE_DIR` first:
 
 ```bash
-SOURCE_DIR="${SOURCE_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)}"
+SOURCE_DIR="${SOURCE_DIR:-$(pwd -P)}"
 test "${SOURCE_DIR#/}" != "$SOURCE_DIR"
 test -d "$SOURCE_DIR"
 ```
@@ -82,19 +82,20 @@ The Compose OpenDesign daemon must already be running (`mmd start`, or invoke **
 command -v curl >/dev/null
 command -v jq >/dev/null
 
-REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
-# shellcheck source=../../../.agents/shared/lib/od_daemon.sh
-. "${REPO}/.agents/shared/lib/od_daemon.sh"
-od_load "$REPO"
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+# shellcheck source=/dev/null
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
 od_require_health
 
-SOURCE_DIR="${SOURCE_DIR:-$REPO}"
+SOURCE_DIR="${SOURCE_DIR:-$APP}"
 test "${SOURCE_DIR#/}" != "$SOURCE_DIR"
 test -d "$SOURCE_DIR"
 test -f "$SOURCE_DIR/DESIGN.md"
 echo "Source DESIGN.md: present; draft will use it"
 
-AGENT_ID="$(python3 "${REPO}/.agents/shared/lib/od_daemon.py" pick-agent)"
+AGENT_ID="$(python3 "${STACK}/lib/od_daemon.py" pick-agent)"
 DAEMON="$OD_DAEMON_URL"
 ```
 
@@ -288,7 +289,7 @@ Run package generation before copying through the same `/api/runs` path used by 
 ````bash
 test -n "$PROJECT_ID"
 
-AGENT_ID="$(python3 "${REPO}/.agents/shared/lib/od_daemon.py" pick-agent)"
+AGENT_ID="$(python3 "${STACK}/lib/od_daemon.py" pick-agent)"
 MODEL="${MODEL:-}"
 
 GENERATION_PROMPT=$(cat <<'EOF'
@@ -491,22 +492,23 @@ od_curl --max-time 30 "$DAEMON/api/design-systems/$DS" | jq -r '.designSystem.bo
 Copy from the generated workspace project over HTTP. Do not rsync from a host OpenDesign data directory — Compose stores project files in the container volume.
 
 ```bash
-REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
-rm -rf "${REPO}/rosey/design-system"
-mkdir -p "${REPO}/rosey/design-system"
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+rm -rf "${APP}/rosey/design-system"
+mkdir -p "${APP}/rosey/design-system"
 
-python3 "${REPO}/.agents/shared/lib/od_daemon.py" export-project \
-  --repo-root "$REPO" \
+python3 "${STACK}/lib/od_daemon.py" export-project \
+  --repo-root "$APP" \
   --project-id "$PROJECT_ID" \
-  --dest "${REPO}/rosey/design-system" \
+  --dest "${APP}/rosey/design-system" \
   --exclude context --exclude logs --exclude .git
 
-test -f "${REPO}/rosey/design-system/DESIGN.md"
-test -f "${REPO}/rosey/design-system/README.md"
-test -f "${REPO}/rosey/design-system/SKILL.md"
-test -d "${REPO}/rosey/design-system/ui_kits/app"
+test -f "${APP}/rosey/design-system/DESIGN.md"
+test -f "${APP}/rosey/design-system/README.md"
+test -f "${APP}/rosey/design-system/SKILL.md"
+test -d "${APP}/rosey/design-system/ui_kits/app"
 
-mkdir -p "${REPO}/rosey/designs"
+mkdir -p "${APP}/rosey/designs"
 jq -n \
   --arg designSystemId "$DS" \
   --arg workspaceProjectId "$PROJECT_ID" \
@@ -514,7 +516,7 @@ jq -n \
   --arg packageDir "opendesign://projects/$PROJECT_ID" \
   --arg copiedPath "rosey/design-system" \
   --arg designPath "rosey/design-system/DESIGN.md" \
-  --arg checksum "$(shasum -a 256 "${REPO}/rosey/design-system/DESIGN.md" | awk '{print $1}')" \
+  --arg checksum "$(shasum -a 256 "${APP}/rosey/design-system/DESIGN.md" | awk '{print $1}')" \
   --arg copiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{
     designSystemId: $designSystemId,
@@ -525,7 +527,7 @@ jq -n \
     designPath: $designPath,
     designChecksum: $checksum,
     copiedAt: $copiedAt
-  }' > "${REPO}/rosey/designs/design-system.json"
+  }' > "${APP}/rosey/designs/design-system.json"
 ```
 
 ## Handoff

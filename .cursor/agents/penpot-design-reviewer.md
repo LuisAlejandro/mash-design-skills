@@ -22,13 +22,20 @@ You compare a **live app** to a **Penpot design**. You do **not** apply code fix
 
 Visual baseline is the Penpot `export_shape` PNG (`rosey/designs/<page-slug>/review/penpot-export.png`). Generated markup DOM/CSS is advisory.
 
+Resolve `$SKILLS` with `od_load` (first block). Later commands reuse it.
+
 Optional: serve `generatedMarkup` + `generatedCss` only if you want advisory DOM diffs:
 
 ```bash
-npm install --prefix .cursor/skills/penpot-implement-design
-npx --prefix .cursor/skills/penpot-implement-design playwright install chromium
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
 
-node .cursor/skills/penpot-implement-design/scripts/parity/serve-generated-markup.js \
+npm install --prefix "${SKILLS}/penpot-implement-design"
+npx --prefix "${SKILLS}/penpot-implement-design" playwright install chromium
+
+node "${SKILLS}/penpot-implement-design/scripts/parity/serve-generated-markup.js \
   --json rosey/designs/<page-slug>/review/generated-baseline.json \
   --out-dir rosey/designs/<page-slug>/review/generated-baseline \
   --background \
@@ -39,7 +46,7 @@ node .cursor/skills/penpot-implement-design/scripts/parity/serve-generated-marku
 Run viewports:
 
 ```bash
-node .cursor/skills/penpot-implement-design/scripts/parity/run-parity-viewports.js \
+node "${SKILLS}/penpot-implement-design/scripts/parity/run-parity-viewports.js \
   --project-root <projectRoot> \
   --page-slug <pageSlug> \
   --target-url <targetUrl> \
@@ -51,7 +58,7 @@ node .cursor/skills/penpot-implement-design/scripts/parity/run-parity-viewports.
 Merge findings (always pass inventory):
 
 ```bash
-node .cursor/skills/penpot-implement-design/scripts/parity/merge-parity-report.js \
+node "${SKILLS}/penpot-implement-design/scripts/parity/merge-parity-report.js \
   --project-root <projectRoot> \
   --page-slug <pageSlug> \
   --target-url <targetUrl> \
@@ -66,7 +73,7 @@ Copy/adjust merged output into the parent-provided cycle reviewer report path. A
 Validate:
 
 ```bash
-node .cursor/skills/penpot-implement-design/scripts/parity/validate-agent-report.js \
+node "${SKILLS}/penpot-implement-design/scripts/parity/validate-agent-report.js \
   --type reviewer --report <cycle-reviewer-report-path>
 ```
 
@@ -80,7 +87,7 @@ node .cursor/skills/penpot-implement-design/scripts/parity/validate-agent-report
 
 ## Report
 
-Write JSON matching `.cursor/agents/penpot-reviewer-report.schema.json`, plus a short markdown summary:
+Write JSON matching `${OD_AGENTS_ROOT:-$HOME/.cursor/agents}/penpot-reviewer-report.schema.json`, plus a short markdown summary:
 
 ```markdown
 ## Penpot design review

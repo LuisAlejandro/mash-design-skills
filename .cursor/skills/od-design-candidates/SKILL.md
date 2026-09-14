@@ -37,7 +37,7 @@ Strip the mode token before resolving inputs. If no mode token is present, set `
 
 - `brief` or `briefFile`: design brief text or path to a text/markdown file (required).
 - `pageSlug`: kebab-case page id (required; derive from brief title if interactive and missing).
-- `repoRoot`: optional; default git root / workspace root.
+- `repoRoot`: optional; default `pwd -P` (Cursor basedir).
 - `winnerVariation` / `winner:vN`: **not** used here — selection is `select_winner.py` or `penpot-design-pipeline`.
 - Optional: `model`, `daemonUrl` (override; default from `OPEN_DESIGN_DAEMON_URL` or `http://127.0.0.1:7457`), `skipScreenshots`.
 
@@ -46,14 +46,15 @@ Strip the mode token before resolving inputs. If no mode token is present, set `
 The Compose OpenDesign service must already be up (`mmd start`, or invoke **mmd-setup**). Health is unauthenticated; every other `/api/*` call sends `Authorization: Bearer $OD_API_TOKEN` from the stack `penpot.env` (process env wins).
 
 ```bash
-REPO="$(git rev-parse --show-toplevel)"
-. "${REPO}/.agents/shared/lib/od_daemon.sh"
-od_load "$REPO"
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
 od_require_health
 
-python3 -m venv .cursor/skills/od-design-candidates/.venv
-.cursor/skills/od-design-candidates/.venv/bin/pip install -r .cursor/skills/od-design-candidates/requirements.txt
-.cursor/skills/od-design-candidates/.venv/bin/playwright install chromium
+python3 -m venv "${SKILLS}/od-design-candidates/.venv"
+"${SKILLS}/od-design-candidates/.venv/bin/pip" install -r "${SKILLS}/od-design-candidates/requirements.txt"
+"${SKILLS}/od-design-candidates/.venv/bin/playwright" install chromium
 ```
 
 If health fails, stop and tell the user to run `mmd start` (or **mmd-setup**). Do not start a sidecar daemon.
@@ -96,16 +97,19 @@ Also write the brief to a temp or page file, e.g. `rosey/designs/<page-slug>/can
 ### 3. Generate candidates (scripts)
 
 ```bash
-REPO="$(git rev-parse --show-toplevel)"
-PYTHON="${REPO}/.cursor/skills/od-design-candidates/.venv/bin/python"
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+PYTHON="${SKILLS}/od-design-candidates/.venv/bin/python"
 # fallback: python3 if venv missing and deps installed
 
-cd "${REPO}/.cursor/skills/od-design-candidates/scripts"
+cd "${SKILLS}/od-design-candidates/scripts"
 "${PYTHON}" generate_candidates.py \
-  --repo-root "${REPO}" \
+  --repo-root "${APP}" \
   --page-slug "<page-slug>" \
-  --brief-file "${REPO}/rosey/designs/<page-slug>/candidates/brief.txt" \
-  --variation-plan "${REPO}/rosey/designs/<page-slug>/candidates/variation-plan.json"
+  --brief-file "${APP}/rosey/designs/<page-slug>/candidates/brief.txt" \
+  --variation-plan "${APP}/rosey/designs/<page-slug>/candidates/variation-plan.json"
 ```
 
 Expect ~minutes × 3 OpenDesign runs (agent from `pick_run_agent`). On failure, surface the error; do not invent HTML.
@@ -135,9 +139,9 @@ END_DESIGN_CANDIDATES_HANDOFF
 After the user chooses `vN`:
 
 ```bash
-cd "${REPO}/.cursor/skills/od-design-candidates/scripts"
+cd "${SKILLS}/od-design-candidates/scripts"
 "${PYTHON}" select_winner.py \
-  --repo-root "${REPO}" \
+  --repo-root "${APP}" \
   --page-slug "<page-slug>" \
   --variation N
 ```
@@ -147,8 +151,8 @@ Copies into `rosey/designs/<page-slug>/source/index.html` (and preview.png when 
 ## Tests
 
 ```bash
-.cursor/skills/od-design-candidates/.venv/bin/python -m pytest \
-  .cursor/skills/od-design-candidates/tests -q
+"${SKILLS}/od-design-candidates/.venv/bin/python" -m pytest \
+  "${SKILLS}/od-design-candidates/tests" -q
 ```
 
 ## Downstream

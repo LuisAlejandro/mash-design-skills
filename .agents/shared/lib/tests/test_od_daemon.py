@@ -11,6 +11,7 @@ from od_daemon import (  # noqa: E402
     AGENT_UNAVAILABLE_HINT,
     DaemonConfig,
     find_app_root,
+    find_skills_root,
     find_stack_root,
     load_daemon_config,
     make_start_message,
@@ -18,6 +19,7 @@ from od_daemon import (  # noqa: E402
     parse_agent_ids,
     pick_run_agent,
     runnable_agent_ids,
+    seed_studio_prefs,
     _parse_env_file,
 )
 
@@ -39,11 +41,38 @@ def test_parse_env_file(tmp_path: Path):
     assert env["OPEN_DESIGN_PORT"] == "7456"
 
 
-def test_find_app_root_uses_git(tmp_path: Path):
-    (tmp_path / ".git").mkdir()
+def test_find_app_root_uses_start(tmp_path: Path):
     nested = tmp_path / "src" / "app"
     nested.mkdir(parents=True)
-    assert find_app_root(nested) == tmp_path.resolve()
+    assert find_app_root(nested) == nested.resolve()
+
+
+def test_find_skills_root_prefers_env(tmp_path: Path, monkeypatch):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("MMD_SKILLS_ROOT", str(skills))
+    assert find_skills_root(start=tmp_path) == skills.resolve()
+
+
+def test_find_skills_root_uses_toolkit_tree(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("MMD_SKILLS_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "install.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "docker-compose.yaml").write_text("x: 1\n", encoding="utf-8")
+    (tmp_path / ".cursor" / "skills" / "mmd-setup").mkdir(parents=True)
+    nested = tmp_path / "src"
+    nested.mkdir()
+    assert find_skills_root(start=nested) == (tmp_path / ".cursor" / "skills").resolve()
+
+
+def test_find_skills_root_falls_back_to_user_dir(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("MMD_SKILLS_ROOT", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    app = tmp_path / "app"
+    app.mkdir()
+    assert find_skills_root(start=app) == (home / ".cursor" / "skills").resolve()
 
 
 def test_find_stack_root_prefers_env(tmp_path: Path, monkeypatch):
@@ -60,6 +89,9 @@ def test_find_stack_root_prefers_env(tmp_path: Path, monkeypatch):
 
 def test_find_stack_root_reads_pin(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("MMD_STACK_ROOT", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     stack = tmp_path / "xdg-stack"
     stack.mkdir()
     (stack / "docker-compose.yaml").write_text("x: 1\n", encoding="utf-8")
@@ -261,3 +293,12 @@ def test_pick_run_agent_fails_without_match():
         assert AGENT_UNAVAILABLE_HINT in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_seed_studio_prefs_marks_onboarding_complete():
+    body = seed_studio_prefs("cursor-agent", now_ms=1700000000000)
+    assert body == {
+        "onboardingCompleted": True,
+        "agentId": "cursor-agent",
+        "privacyDecisionAt": 1700000000000,
+    }

@@ -1,11 +1,17 @@
 # Compose OpenDesign daemon helper. Source from skills; never spawn a host daemon.
-# Root-relative (.agents/shared/lib) so every harness resolves the same path.
 # Usage:
-#   REPO="$(git rev-parse --show-toplevel)"
-#   . "${REPO}/.agents/shared/lib/od_daemon.sh"
-#   od_load
+#   STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+#   APP="$(pwd -P)"
+#   . "${STACK}/lib/od_daemon.sh"
+#   od_load "$APP"
+#   # SKILLS=$OD_SKILLS_ROOT (user dir, or this clone's .cursor/skills while editing the toolkit)
 #   od_require_health
 #   od_curl --max-time 30 "$OD_DAEMON_URL/api/design-systems"
+
+od_looks_like_toolkit() {
+  local d="$1"
+  [ -f "$d/install.sh" ] && [ -f "$d/docker-compose.yaml" ] && [ -d "$d/.cursor/skills/mmd-setup" ]
+}
 
 od_find_stack() {
   local app="$1"
@@ -17,6 +23,11 @@ od_find_stack() {
     return 0
   fi
 
+  if [ -f "$xdg/penpot.env" ] || [ -f "$xdg/docker-compose.yaml" ]; then
+    echo "$xdg"
+    return 0
+  fi
+
   if [ -f "$app/rosey/mmd-skills.json" ] && command -v python3 >/dev/null 2>&1; then
     from_pin="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("stack_root") or "")' "$app/rosey/mmd-skills.json" 2>/dev/null || true)"
     if [ -n "$from_pin" ] && [ -d "$from_pin" ]; then
@@ -25,26 +36,45 @@ od_find_stack() {
     fi
   fi
 
-  if [ -f "$xdg/penpot.env" ] || [ -f "$xdg/docker-compose.yaml" ]; then
-    echo "$xdg"
-    return 0
-  fi
-
   if [ -f "$app/penpot.env" ] || [ -f "$app/penpot.env.example" ]; then
     echo "$app"
     return 0
   fi
 
-  echo "$app"
+  echo "$xdg"
+}
+
+od_find_skills() {
+  local start="${1:-}"
+  local dir
+  local xdg="${HOME}/.cursor/skills"
+
+  if [ -n "${MMD_SKILLS_ROOT:-}" ] && [ -d "$MMD_SKILLS_ROOT" ]; then
+    echo "$MMD_SKILLS_ROOT"
+    return 0
+  fi
+
+  dir="${start:-$(pwd -P)}"
+  while [ "$dir" != "/" ]; do
+    if od_looks_like_toolkit "$dir"; then
+      echo "$dir/.cursor/skills"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  echo "$xdg"
 }
 
 od_load() {
   local repo="${1:-}"
   if [ -z "$repo" ]; then
-    repo="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+    repo="$(pwd -P)"
   fi
   OD_REPO_ROOT="$repo"
   OD_STACK_ROOT="$(od_find_stack "$repo")"
+  OD_SKILLS_ROOT="$(od_find_skills "$repo")"
+  OD_AGENTS_ROOT="${HOME}/.cursor/agents"
 
   if [ -f "$OD_STACK_ROOT/penpot.env" ]; then
     set -a
@@ -58,7 +88,10 @@ od_load() {
   else
     OD_DAEMON_URL="http://127.0.0.1:${OPEN_DESIGN_PORT:-7457}"
   fi
-  export OD_DAEMON_URL OD_API_TOKEN OD_REPO_ROOT OD_STACK_ROOT
+  export OD_DAEMON_URL OD_API_TOKEN OD_REPO_ROOT OD_STACK_ROOT OD_SKILLS_ROOT OD_AGENTS_ROOT
+  export STACK="$OD_STACK_ROOT"
+  export SKILLS="$OD_SKILLS_ROOT"
+  export APP="$OD_REPO_ROOT"
 }
 
 od_require_health() {

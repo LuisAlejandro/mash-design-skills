@@ -16,6 +16,7 @@ from generate_candidates import (  # noqa: E402
 )
 from opendesign_client import (  # noqa: E402
     OpenDesignClient,
+    _shared_lib_dir,
     parse_create_response,
     parse_run_start_response,
 )
@@ -161,3 +162,18 @@ def test_preflight_asks_for_mmd_start(tmp_path: Path):
     ok, reason = client.preflight()
     assert ok is False
     assert "mmd start" in reason
+
+
+def test_shared_lib_dir_prefers_stack_env(tmp_path: Path, monkeypatch):
+    stack = tmp_path / "stack"
+    lib = stack / "lib"
+    lib.mkdir(parents=True)
+    (lib / "od_daemon.py").write_text("TOKEN = 1\n", encoding="utf-8")
+    monkeypatch.setenv("MMD_STACK_ROOT", str(stack))
+    assert _shared_lib_dir() == lib.resolve()
+
+
+def test_shared_lib_dir_walks_to_toolkit_checkout():
+    shared = _shared_lib_dir()
+    assert (shared / "od_daemon.py").is_file()
+    assert shared.name == "lib"

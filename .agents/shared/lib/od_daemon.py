@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,8 +17,18 @@ from typing import Any
 DEFAULT_DAEMON_URL = "http://127.0.0.1:7457"
 DEFAULT_PORT = "7457"
 ENV_FILENAMES = ("penpot.env",)
-DEFAULT_STACK = Path.home() / ".local" / "share" / "mmd-skills"
 PIN_RELATIVE = Path("rosey") / "mmd-skills.json"
+
+
+def default_stack_root() -> Path:
+    return Path.home() / ".local" / "share" / "mmd-skills"
+
+
+def default_skills_root() -> Path:
+    return Path.home() / ".cursor" / "skills"
+
+
+DEFAULT_STACK = default_stack_root()
 START_HINT = (
     "OpenDesign daemon is not running. Run `mmd start` (or invoke the mmd-setup "
     "skill) and retry. Do not start a host `opendesign` process."
@@ -77,16 +88,37 @@ def _looks_like_stack(path: Path) -> bool:
 
 
 def find_app_root(start: Path | None = None) -> Path | None:
-    """Git toplevel of the app (artifacts, copied skills)."""
-    for candidate in _walk_up(start):
-        if (candidate / ".git").exists():
-            return candidate
-    return None
+    """App workspace (cwd / start). Not the Compose stack."""
+    current = (start or Path.cwd()).resolve()
+    if current.is_file():
+        current = current.parent
+    return current
 
 
 def find_repo_root(start: Path | None = None) -> Path | None:
-    """App git root. Not the Compose stack (see find_stack_root)."""
+    """App workspace. Not the Compose stack (see find_stack_root)."""
     return find_app_root(start)
+
+
+def _looks_like_toolkit(path: Path) -> bool:
+    return (
+        (path / "install.sh").is_file()
+        and (path / "docker-compose.yaml").is_file()
+        and (path / ".cursor" / "skills" / "mmd-setup").is_dir()
+    )
+
+
+def find_skills_root(*, start: Path | None = None) -> Path:
+    """User or in-tree Cursor skills directory."""
+    env = os.environ.get("MMD_SKILLS_ROOT", "").strip()
+    if env:
+        path = Path(env).expanduser()
+        if path.is_dir():
+            return path.resolve()
+    for candidate in _walk_up(start):
+        if _looks_like_toolkit(candidate):
+            return (candidate / ".cursor" / "skills").resolve()
+    return default_skills_root().resolve()
 
 
 def _stack_from_pin(app_root: Path | None) -> Path | None:
@@ -120,15 +152,18 @@ def find_stack_root(
         if path.is_dir():
             return path.resolve()
 
+    default = default_stack_root()
+    if default.is_dir() and _looks_like_stack(default):
+        return default.resolve()
+
     pin_stack = _stack_from_pin(app_root)
     if pin_stack is not None:
         return pin_stack
 
-    default = DEFAULT_STACK
-    if default.is_dir() and _looks_like_stack(default):
-        return default.resolve()
-
     for candidate in _walk_up(start):
+        pin_stack = _stack_from_pin(candidate)
+        if pin_stack is not None:
+            return pin_stack
         if _looks_like_stack(candidate):
             return candidate
 
@@ -372,6 +407,29 @@ def pick_run_agent(
     raise RuntimeError(AGENT_UNAVAILABLE_HINT)
 
 
+def seed_studio_prefs(agent_id: str, *, now_ms: int | None = None) -> dict[str, Any]:
+    """PUT /api/app-config body so the web UI skips Cloud onboarding."""
+    ts = int(time.time() * 1000) if now_ms is None else now_ms
+    return {
+        "onboardingCompleted": True,
+        "agentId": agent_id,
+        "privacyDecisionAt": ts,
+    }
+
+
+def seed_studio(*, config: DaemonConfig | None = None) -> str:
+    cfg = require_health(config)
+    agent_id = pick_run_agent(config=cfg)
+    api_request(
+        "PUT",
+        "/api/app-config",
+        config=cfg,
+        json_body=seed_studio_prefs(agent_id),
+        auth=bool(cfg.token),
+    )
+    return agent_id
+
+
 def encode_file_path(file_path: str) -> str:
     segments = [urllib.parse.quote(part, safe="") for part in file_path.split("/") if part]
     return "/".join(segments)
@@ -466,6 +524,13 @@ def _cli(argv: list[str] | None = None) -> int:
     pick.add_argument("--repo-root", type=Path, default=None)
     pick.add_argument("--stack-root", type=Path, default=None)
 
+    seed = sub.add_parser(
+        "seed-studio",
+        help="Mark OpenDesign onboarding complete and set agentId from pick-agent",
+    )
+    seed.add_argument("--repo-root", type=Path, default=None)
+    seed.add_argument("--stack-root", type=Path, default=None)
+
     export = sub.add_parser("export-project", help="Download project files via HTTP")
     export.add_argument("--project-id", required=True)
     export.add_argument("--dest", required=True, type=Path)
@@ -496,6 +561,10 @@ def _cli(argv: list[str] | None = None) -> int:
     if args.command == "pick-agent":
         require_health(cfg)
         print(pick_run_agent(config=cfg))
+        return 0
+
+    if args.command == "seed-studio":
+        print(seed_studio(config=cfg))
         return 0
 
     if args.command == "export-project":

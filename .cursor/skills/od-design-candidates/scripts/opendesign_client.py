@@ -13,12 +13,20 @@ from typing import Any, Callable
 logger = logging.getLogger(__name__)
 
 def _shared_lib_dir() -> Path:
+    env = os.environ.get("MMD_STACK_ROOT", "").strip()
+    if env:
+        lib = Path(env).expanduser() / "lib"
+        if (lib / "od_daemon.py").is_file():
+            return lib.resolve()
+    xdg = Path.home() / ".local" / "share" / "mmd-skills" / "lib"
+    if (xdg / "od_daemon.py").is_file():
+        return xdg.resolve()
     for candidate in Path(__file__).resolve().parents:
         lib = candidate / ".agents" / "shared" / "lib"
         if (lib / "od_daemon.py").is_file():
             return lib
     raise FileNotFoundError(
-        "Cannot find .agents/shared/lib/od_daemon.py. Run install.sh from the app root."
+        "Cannot find od_daemon.py. Run install.sh from the MMD Skills toolkit."
     )
 
 

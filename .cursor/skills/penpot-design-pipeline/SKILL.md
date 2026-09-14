@@ -71,11 +71,14 @@ Wait for `DESIGN_CANDIDATES_HANDOFF` with `SUCCESS: true`.
 ### Stage B — Select winner
 
 ```bash
-REPO="$(git rev-parse --show-toplevel)"
-PYTHON="${REPO}/.cursor/skills/od-design-candidates/.venv/bin/python"
-cd "${REPO}/.cursor/skills/od-design-candidates/scripts"
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+PYTHON="${SKILLS}/od-design-candidates/.venv/bin/python"
+cd "${SKILLS}/od-design-candidates/scripts"
 "${PYTHON}" select_winner.py \
-  --repo-root "${REPO}" \
+  --repo-root "${APP}" \
   --page-slug "<page-slug>" \
   --variation N
 ```
@@ -119,9 +122,13 @@ END_DESIGN_PIPELINE_HANDOFF
 Same as `od-design-candidates` (Compose daemon via `mmd start` / **mmd-setup**, Playwright) plus:
 
 ```bash
-npm install --prefix .cursor/skills/penpot-import-html
-npm install --prefix .cursor/skills/penpot-create-design-system
-npm install --prefix .cursor/skills/penpot-implement-design
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+npm install --prefix "${SKILLS}/penpot-import-html"
+npm install --prefix "${SKILLS}/penpot-create-design-system"
+npm install --prefix "${SKILLS}/penpot-implement-design"
 ```
 
 Penpot MCP (`penpot-local` or `user-penpot-local`) connected with the target file open.

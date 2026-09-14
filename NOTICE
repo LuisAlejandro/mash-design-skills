@@ -1,0 +1,31 @@
+MMD Skills
+Copyright (c) 2026 Luis Alejandro
+
+This repository's original scripts, Cursor skills, agents, Dockerfile wrapper,
+and documentation are licensed under the MIT License (see LICENSE). That grant
+covers this project's files only. It does not relicense third-party software
+pulled in by Docker Compose, image builds, or optional converters.
+
+Third-party components used at runtime or build time:
+
+Penpot
+  docker-compose.yaml is derived from Penpot's official Compose file.
+  Runtime images come from Penpot's published registries.
+  https://penpot.app
+  https://github.com/penpot/penpot
+
+OpenDesign
+  Compose service open-design uses ghcr.io/nexu-io/od.
+  https://github.com/nexu-io/open-design
+
+figpot
+  Optional Figma-to-Penpot conversion via `mmd convert` / convert.sh
+  (`npx @betagouv/figpot`).
+  https://github.com/betagouv/figpot
+
+Vendor agent CLIs (local image only)
+  docker/opendesign builds image penpot-opendesign:local by installing
+  published Linux binaries: cursor-agent, claude, codex, opencode, and pi.
+  Those CLIs remain the property of their vendors. Do not publish or
+  redistribute penpot-opendesign:local. Each clone builds the image with
+  `mmd setup`.

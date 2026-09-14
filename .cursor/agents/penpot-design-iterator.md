@@ -47,7 +47,12 @@ For cycle N:
 2. Validate:
 
 ```bash
-node .cursor/skills/penpot-implement-design/scripts/parity/validate-iteration-cycle.js \
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+
+node "${SKILLS}/penpot-implement-design/scripts/parity/validate-iteration-cycle.js \
   --project-root <projectRoot> --page-slug <pageSlug> --cycle <N>
 ```
 
@@ -56,13 +61,18 @@ node .cursor/skills/penpot-implement-design/scripts/parity/validate-iteration-cy
 
 Stop early when PNG + inventory are close (no blocking/major). Do not run remaining cycles only because markup DOM `aligned` is false.
 
-When finished, write `rosey/designs/<page-slug>/review/iterator-report.json` matching `.cursor/agents/penpot-iterator-report.schema.json` and validate:
+When finished, write `rosey/designs/<page-slug>/review/iterator-report.json` matching `${OD_AGENTS_ROOT:-$HOME/.cursor/agents}/penpot-iterator-report.schema.json` and validate:
 
 ```bash
-node .cursor/skills/penpot-implement-design/scripts/parity/validate-agent-report.js \
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+
+node "${SKILLS}/penpot-implement-design/scripts/parity/validate-agent-report.js \
   --type iterator --report rosey/designs/<page-slug>/review/iterator-report.json
 
-node .cursor/skills/penpot-implement-design/scripts/parity/stop-baseline-server.js \
+node "${SKILLS}/penpot-implement-design/scripts/parity/stop-baseline-server.js \
   --pid-file rosey/designs/<page-slug>/review/baseline-server.pid \
   --state-file rosey/designs/<page-slug>/review/baseline-server.json
 ```

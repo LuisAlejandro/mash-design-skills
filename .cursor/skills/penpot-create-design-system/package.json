@@ -1,0 +1,11 @@
+{
+  "name": "penpot-create-design-system",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Architecture scan and component catalog for Penpot design-system rules",
+  "dependencies": {
+    "@babel/parser": "^7.27.0",
+    "@babel/traverse": "^7.27.0"
+  }
+}

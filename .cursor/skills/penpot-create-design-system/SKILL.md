@@ -99,8 +99,12 @@ Before finalizing rules, analyze the project to understand existing patterns. Us
 **Framework Detection — run the scanner, then confirm:**
 
 ```bash
-npm install --prefix .cursor/skills/penpot-create-design-system
-node .cursor/skills/penpot-create-design-system/scripts/scan-and-catalog.js --project-root <projectRoot>
+STACK="${MMD_STACK_ROOT:-$HOME/.local/share/mmd-skills}"
+APP="$(pwd -P)"
+. "${STACK}/lib/od_daemon.sh"
+od_load "$APP"
+npm install --prefix "${SKILLS}/penpot-create-design-system"
+node "${SKILLS}/penpot-create-design-system/scripts/scan-and-catalog.js" --project-root <projectRoot>
 ```
 
 Use the printed `framework`, `styling`, `componentDirs`, `routeDirs`, `assetDirs`, and `globs`. Fill the Component & Variant Mapping table from `rosey/designs/component-catalog.json` (`matches`, `props`, `suggestedImport`). Do **not** write `.cursor/rules/od-design-system.mdc`.
@@ -160,7 +164,7 @@ Before generating rules, inspect the Penpot design file to understand design-sid
 
 **Inspect token catalog:**
 
-Read the `penpot-token-resolution` skill (`.cursor/skills/penpot-token-resolution/SKILL.md`) and follow its **catalog** mode. Run the catalog execute_code script from that skill. It returns `{ overview, setCount, themeCount, resolvedTokens, failedTokens }`.
+Read the `penpot-token-resolution` skill and follow its **catalog** mode. Run the catalog execute_code script from that skill. It returns `{ overview, setCount, themeCount, resolvedTokens, failedTokens }`.
 
 **Inspect component library, colors, and component variants (execute_code):** Read `scripts/inspect-library.js` in this skill's directory and run it via Penpot MCP execute_code.
 
