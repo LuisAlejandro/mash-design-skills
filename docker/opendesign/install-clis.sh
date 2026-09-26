@@ -7,6 +7,12 @@ export HOME=/root
 export PATH="/usr/local/bin:/root/.local/bin:/home/open-design/.local/bin:/root/.opencode/bin:${PATH}"
 RUNTIME_HOME=/home/open-design
 
+: "${CURSOR_AGENT_VERSION:?install-clis: CURSOR_AGENT_VERSION must be pinned}"
+: "${CLAUDE_CODE_VERSION:?install-clis: CLAUDE_CODE_VERSION must be pinned}"
+: "${CODEX_VERSION:?install-clis: CODEX_VERSION must be pinned}"
+: "${OPENCODE_VERSION:?install-clis: OPENCODE_VERSION must be pinned}"
+: "${PI_VERSION:?install-clis: PI_VERSION must be pinned}"
+
 mkdir -p /root/.local/bin /opt /usr/local/bin \
   "${RUNTIME_HOME}/.local/bin"
 
@@ -77,8 +83,36 @@ publish_bin() {
   echo "install-clis: relocated $name -> ${dest}/${rel}"
 }
 
+# Compare a CLI's self-reported --version output against its pinned build
+# ARG. Substring match (not exact equality) tolerates each CLI's own
+# formatting (a "v" prefix, surrounding text) without weakening the check:
+# a real version drift will not appear anywhere in the output.
+check_pinned_version() {
+  local name="$1"
+  local expected="$2"
+  hash -r
+  local actual
+  actual="$("$name" --version 2>&1 | tr -d '\r')"
+  case "$actual" in
+    *"$expected"*) ;;
+    *)
+      echo "install-clis: $name installed version '$actual' does not match pinned $expected" >&2
+      exit 1
+      ;;
+  esac
+  echo "install-clis: $name version OK (pinned $expected)"
+}
+
 echo "=== cursor-agent ==="
-retry bash -c 'set -o pipefail; curl https://cursor.com/install -fsS | bash'
+case "$(uname -m)" in
+  x86_64|amd64) CURSOR_ARCH=x64 ;;
+  aarch64|arm64) CURSOR_ARCH=arm64 ;;
+  *) echo "install-clis: unsupported arch for cursor-agent: $(uname -m)" >&2; exit 1 ;;
+esac
+export CURSOR_ARCH
+CURSOR_DEST="/root/.local/share/cursor-agent/versions/${CURSOR_AGENT_VERSION}"
+export CURSOR_DEST
+retry bash -c 'set -o pipefail; mkdir -p "$CURSOR_DEST" && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" | tar --strip-components=1 -xzf - -C "$CURSOR_DEST"'
 CURSOR_SRC="$(find /root/.local/share/cursor-agent -type f -name cursor-agent | head -n 1)"
 if [ -z "$CURSOR_SRC" ]; then
   echo "install-clis: cursor-agent payload not found under ~/.local/share/cursor-agent" >&2
@@ -103,7 +137,7 @@ echo "install-clis: bundled node"
 /opt/cursor-agent/node -e '
 const fs = require("fs");
 const p = "/opt/cursor-agent/index.js";
-const from = "r(\"/usr/bin/ldd\",\"utf-8\").includes(\"musl\")";
+const from = "n(\"/usr/bin/ldd\",\"utf-8\").includes(\"musl\")";
 const s = fs.readFileSync(p, "utf8");
 if (!s.includes(from)) {
   console.error("install-clis: cursor-agent musl/ldd pattern not found");
@@ -118,24 +152,28 @@ if ! timeout 20 cursor-agent status >/tmp/cursor-agent-status.out 2>/tmp/cursor-
   exit 1
 fi
 echo "install-clis: cursor-agent status: $(tr -d "\n" < /tmp/cursor-agent-status.out)"
+check_pinned_version cursor-agent "$CURSOR_AGENT_VERSION"
 
 echo "=== claude ==="
 HOME="${RUNTIME_HOME}"
 export HOME
-retry bash -c 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash'
+retry bash -c 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_CODE_VERSION"'
 publish_bin claude
+check_pinned_version claude "$CLAUDE_CODE_VERSION"
 
 echo "=== codex ==="
 HOME="${RUNTIME_HOME}"
 export HOME
 export CODEX_NON_INTERACTIVE=true
+export CODEX_RELEASE="$CODEX_VERSION"
 retry sh -c 'set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | sh'
 publish_bin codex
+check_pinned_version codex "$CODEX_VERSION"
 
 echo "=== opencode ==="
 HOME=/root
 export HOME
-retry bash -c 'set -o pipefail; curl -fsSL https://opencode.ai/install | bash'
+retry bash -c 'set -o pipefail; curl -fsSL https://opencode.ai/install | VERSION="$OPENCODE_VERSION" bash'
 if [ ! -x /root/.opencode/bin/opencode ]; then
   echo "install-clis: opencode missing after install" >&2
   exit 1
@@ -145,12 +183,17 @@ mv /root/.opencode /opt/opencode
 chmod -R a+rX /opt/opencode
 ln -sfn /opt/opencode/bin/opencode /usr/local/bin/opencode
 ln -sfn /usr/local/bin/opencode /usr/local/bin/opencode-cli
+check_pinned_version opencode "$OPENCODE_VERSION"
 
 echo "=== pi ==="
-HOME="${RUNTIME_HOME}"
+HOME=/root
 export HOME
-retry bash -c 'set -o pipefail; curl -fsSL https://pi.dev/install.sh | bash'
-publish_bin pi
+rm -rf /opt/pi
+retry npm install -g --prefix /opt/pi --ignore-scripts --min-release-age=0 \
+  --no-fund --no-audit "@earendil-works/pi-coding-agent@${PI_VERSION}"
+chmod -R a+rX /opt/pi
+ln -sfn /opt/pi/bin/pi /usr/local/bin/pi
+check_pinned_version pi "$PI_VERSION"
 
 npm cache clean --force >/dev/null 2>&1 || true
 rm -rf /root/.npm /tmp/*

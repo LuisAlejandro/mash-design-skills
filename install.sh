@@ -1,10 +1,60 @@
 #!/usr/bin/env bash
 # Install MMD Skills user-wide (Cursor skills + machine Penpot stack).
+# Piped install: curl -fsSL https://raw.githubusercontent.com/LuisAlejandro/mmd-skills/develop/install.sh | bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_URL="${MMD_REPO_URL:-https://github.com/LuisAlejandro/mmd-skills}"
+DEFAULT_REF="${MMD_REF:-develop}"
+
+toolkit_root_ok() {
+  local d="$1"
+  [ -n "$d" ] && [ -d "$d" ] && \
+    [ -f "$d/install.sh" ] && [ -f "$d/docker-compose.yaml" ] && \
+    [ -d "$d/.cursor/skills/mmd-setup" ]
+}
+
+bootstrap_from_github() {
+  local tmp extracted url
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/mmd-skills.XXXXXX")"
+  echo "-> Downloading ${REPO_URL} (${DEFAULT_REF})..."
+  url="${REPO_URL}/archive/refs/heads/${DEFAULT_REF}.tar.gz"
+  if ! curl -fsSL "$url" | tar -xz -C "$tmp"; then
+    url="${REPO_URL}/archive/refs/tags/${DEFAULT_REF}.tar.gz"
+    curl -fsSL "$url" | tar -xz -C "$tmp"
+  fi
+  extracted=""
+  for d in "$tmp"/*; do
+    if [ -d "$d" ]; then
+      extracted="$d"
+      break
+    fi
+  done
+  if ! toolkit_root_ok "$extracted"; then
+    echo "Error: downloaded tree is not an MMD Skills toolkit" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  export MMD_BOOTSTRAP_TMP="$tmp"
+  exec bash "$extracted/install.sh" "$@"
+}
+
+if [ -n "${MMD_BOOTSTRAP_TMP:-}" ]; then
+  trap 'rm -rf "${MMD_BOOTSTRAP_TMP}"' EXIT
+fi
+
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+fi
+
 SOURCE_ROOT="${MMD_SKILLS:-$SCRIPT_DIR}"
-SOURCE_ROOT="$(cd "$SOURCE_ROOT" && pwd -P)"
+if toolkit_root_ok "$SOURCE_ROOT"; then
+  SOURCE_ROOT="$(cd "$SOURCE_ROOT" && pwd -P)"
+else
+  bootstrap_from_github "$@"
+fi
+
 VERSION_FILE="$SOURCE_ROOT/VERSION"
 INSTALL_VERSION="0.1.0"
 DEFAULT_STACK="${HOME}/.local/share/mmd-skills"
@@ -25,7 +75,7 @@ usage() {
 Usage: install.sh [options]
 
 Install the Cursor skill pack for this machine and sync the Compose stack.
-Run from the MMD Skills toolkit clone (or set MMD_SKILLS).
+From a clone: ./install.sh. Piped: curl the raw install.sh from GitHub | bash.
 
   --check           Verify a previous install
   --version         Print toolkit version
@@ -39,6 +89,8 @@ Environment:
   MMD_SKILLS        Toolkit clone (default: directory of this script)
   MMD_STACK_ROOT    Stack data dir (default: ~/.local/share/mmd-skills)
   MMD_SKILLS_ROOT   Cursor skills dir (default: ~/.cursor/skills)
+  MMD_REF           GitHub branch or tag when piped (default: develop)
+  MMD_REPO_URL      GitHub repo URL when piped
 EOF
 }
 
@@ -325,6 +377,9 @@ sync_stack() {
   if [ ! -f "$STACK_ROOT/penpot.env" ] && [ -f "$SOURCE_ROOT/penpot.env" ]; then
     cp "$SOURCE_ROOT/penpot.env" "$STACK_ROOT/penpot.env"
     echo "   copied existing penpot.env from toolkit clone"
+  fi
+  if [ -f "$STACK_ROOT/penpot.env" ]; then
+    chmod 600 "$STACK_ROOT/penpot.env"
   fi
   if [ -d "${HOME}/.local/bin" ]; then
     ln -sfn "$STACK_ROOT/bin/mmd" "${HOME}/.local/bin/mmd"

@@ -477,6 +477,31 @@ def _should_skip_export(name: str, excludes: tuple[str, ...]) -> bool:
     return False
 
 
+def _is_unsafe_export_name(name: str) -> bool:
+    """Defense in depth: encode_file_path already URL-encodes segments for
+    the read path, but export must not trust `name` from the API payload."""
+    return name.startswith("/") or ".." in name.split("/")
+
+
+def _cleanup_written(dest_resolved: Path, written: list[Path]) -> None:
+    """Remove files written during a failed export call, then prune any
+    parent directories left empty by that removal (never deletes a
+    directory that predates this export call or still holds other files)."""
+    parents: set[Path] = set()
+    for path in written:
+        if path.is_file() or path.is_symlink():
+            path.unlink(missing_ok=True)
+        parents.add(path.parent)
+    for parent in sorted(parents, key=lambda p: len(p.parts), reverse=True):
+        current = parent
+        while current != dest_resolved and dest_resolved in current.parents:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
+
 def export_project(
     project_id: str,
     dest: Path,
@@ -486,8 +511,10 @@ def export_project(
 ) -> list[str]:
     cfg = config or load_daemon_config()
     files = list_project_files(project_id, config=cfg)
-    written: list[str] = []
+    written_paths: list[Path] = []
+    written_names: list[str] = []
     dest.mkdir(parents=True, exist_ok=True)
+    dest_resolved = dest.resolve()
     for entry in files:
         name = str(entry.get("name") or entry.get("path") or "")
         kind = str(entry.get("type") or entry.get("kind") or "file")
@@ -495,17 +522,24 @@ def export_project(
             continue
         if _should_skip_export(name, excludes):
             continue
+        if _is_unsafe_export_name(name):
+            _cleanup_written(dest_resolved, written_paths)
+            raise RuntimeError(f"unsafe path in export: {name}")
+        target = (dest_resolved / name).resolve(strict=False)
+        if target == dest_resolved or not target.is_relative_to(dest_resolved):
+            _cleanup_written(dest_resolved, written_paths)
+            raise RuntimeError(f"export path escapes destination: {name}")
         payload = read_project_file(project_id, name, config=cfg, binary=True)
-        target = dest / name
         target.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(payload, str):
             target.write_text(payload, encoding="utf-8")
         else:
             target.write_bytes(payload)
-        written.append(name)
-    if not written:
+        written_paths.append(target)
+        written_names.append(name)
+    if not written_names:
         raise RuntimeError(f"No exportable files found in OpenDesign project {project_id}")
-    return written
+    return written_names
 
 
 def _cli(argv: list[str] | None = None) -> int:

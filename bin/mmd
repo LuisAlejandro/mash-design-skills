@@ -2,7 +2,6 @@
 # MMD Skills stack CLI (Penpot + MCP + OpenDesign). No Make.
 set -euo pipefail
 
-PROJECT_NAME="penpot"
 COMPOSE_FILE="docker-compose.yaml"
 ENV_FILE="penpot.env"
 DEFAULT_STACK="${HOME}/.local/share/mmd-skills"
@@ -37,8 +36,46 @@ resolve_stack() {
   echo "$DEFAULT_STACK"
 }
 
+is_toolkit_root() {
+  local d="$1"
+  [ -n "$d" ] && [ -f "$d/install.sh" ] && [ -f "$d/bin/mmd" ] && [ -f "$d/docker-compose.yaml" ] \
+    && [ -d "$d/.cursor/skills/mmd-setup" ]
+}
+
+derive_project_name() {
+  # Compose project identity for a given resolved stack root.
+  # $1: resolved root path. $2: "1" when MMD_STACK_ROOT was explicitly set
+  # for this root, "0" for an implicit/default resolution.
+  #
+  # Two legacy modes keep the literal "penpot" project name so existing
+  # volumes keep working (README.md:72): the installed default share root,
+  # and an implicit (non-explicit) invocation from a toolkit clone. Any
+  # explicit MMD_STACK_ROOT — including one pointing at a clone — derives a
+  # stable per-root identity instead, so distinct custom stack roots never
+  # collide under one Compose project (R5). Moving an explicit
+  # MMD_STACK_ROOT to a different real path changes its derived identity
+  # and orphans the prior project's resources under the old name.
+  local root="$1"
+  local explicit="$2"
+  if [ "$root" = "${HOME}/.local/share/mmd-skills" ]; then
+    echo "penpot"
+    return 0
+  fi
+  if [ "$explicit" != "1" ] && is_toolkit_root "$root"; then
+    echo "penpot"
+    return 0
+  fi
+  echo "mmd-$(printf '%s' "$root" | shasum -a 256 | cut -c1-32)"
+}
+
+if [ -n "${MMD_STACK_ROOT:-}" ]; then
+  MMD_STACK_ROOT_WAS_EXPLICIT=1
+else
+  MMD_STACK_ROOT_WAS_EXPLICIT=0
+fi
 STACK="$(resolve_stack)"
 export MMD_STACK_ROOT="$STACK"
+PROJECT_NAME="$(derive_project_name "$STACK" "$MMD_STACK_ROOT_WAS_EXPLICIT")"
 
 require_docker() {
   if ! command -v docker >/dev/null 2>&1; then
@@ -64,6 +101,18 @@ compose() {
 require_env() {
   if [ ! -f "${STACK}/${ENV_FILE}" ]; then
     print_error "Missing ${STACK}/${ENV_FILE}. Run: mmd setup"
+    exit 1
+  fi
+}
+
+require_strong_secret() {
+  # Compose's `${PENPOT_SECRET_KEY:?err}` guard only catches unset/empty.
+  # This catches the one case it cannot: a penpot.env already containing
+  # the known literal fallback value.
+  local key
+  key="$(env_value PENPOT_SECRET_KEY)"
+  if [ -z "$key" ] || [ "$key" = "change-this-insecure-key" ]; then
+    print_error "PENPOT_SECRET_KEY is missing or uses the insecure fallback value. Run: mmd setup"
     exit 1
   fi
 }
@@ -118,6 +167,7 @@ if not replaced:
     out.append(f"{key}={value}")
 path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PY
+  chmod 600 "$file"
 }
 
 env_value_empty() {
@@ -485,14 +535,16 @@ cmd_setup() {
   if [ ! -f "${ENV_FILE}" ]; then
     if [ -f penpot.env.example ]; then
       cp penpot.env.example "${ENV_FILE}"
+      chmod 600 "${ENV_FILE}"
       print_success "Created ${ENV_FILE} from penpot.env.example"
     else
       print_error "penpot.env.example not found in ${STACK}"
       exit 1
     fi
   else
+    chmod 600 "${ENV_FILE}"
     print_info "${ENV_FILE} already exists (kept; missing OpenDesign keys appended)"
-    ensure_env_key OPEN_DESIGN_IMAGE "ghcr.io/nexu-io/od:latest"
+    ensure_env_key OPEN_DESIGN_IMAGE "ghcr.io/nexu-io/od:0.17.0"
     ensure_env_key OPEN_DESIGN_MEM_LIMIT "4g"
     ensure_env_key OPEN_DESIGN_PORT "7457"
     ensure_env_key OD_CODEX_SANDBOX "danger-full-access"
@@ -508,14 +560,18 @@ cmd_setup() {
 
   if [ ! -f .env ] && [ -f .env.example ]; then
     cp .env.example .env
+    chmod 600 .env
     print_info "Created .env from .env.example (fill tokens before mmd convert)"
+  elif [ -f .env ]; then
+    chmod 600 .env
   fi
   echo ""
 
   print_step "Secrets..."
   if ! grep -q "^PENPOT_SECRET_KEY=" "${ENV_FILE}" \
     || grep -q "^PENPOT_SECRET_KEY=$" "${ENV_FILE}" \
-    || grep -q "^PENPOT_SECRET_KEY=your_secret_key" "${ENV_FILE}"; then
+    || grep -q "^PENPOT_SECRET_KEY=your_secret_key" "${ENV_FILE}" \
+    || grep -q "^PENPOT_SECRET_KEY=change-this-insecure-key" "${ENV_FILE}"; then
     set_env_value PENPOT_SECRET_KEY "$(openssl rand -base64 64 | tr -d '\n')"
     print_success "Generated PENPOT_SECRET_KEY"
   else
@@ -574,6 +630,7 @@ cmd_auth() {
   require_docker
   require_compose_file
   require_env
+  chmod 600 "${STACK}/${ENV_FILE}"
   SKIP_AUTH=0
   prompt_provider_auth 1
   echo "Recreating open-design so Compose picks up ${ENV_FILE}..."
@@ -584,6 +641,7 @@ cmd_auth() {
 cmd_start() {
   require_compose_file
   require_env
+  require_strong_secret
   if [ -z "$(docker images -q penpotapp/frontend 2>/dev/null || true)" ]; then
     cmd_setup "$@"
   fi
@@ -641,6 +699,7 @@ cmd_backup() {
   stamp="$(date +%Y%m%d-%H%M%S)"
   compose exec -T penpot-postgres pg_dump -U penpot penpot > "${STACK}/backups/penpot-${stamp}.sql"
   echo "Database backup created in ${STACK}/backups/"
+  echo "Coverage: PostgreSQL data only. This does not cover Penpot assets, OpenDesign data, or OpenDesign home state; no restore path exists yet for those volumes."
 }
 
 cmd_doctor() {
@@ -718,30 +777,67 @@ for ident in ("cursor-agent", "claude", "codex", "opencode", "byok-opencode", "p
 PY
 }
 
-cmd_destroy() {
-  require_compose_file
-  echo ""
-  echo "WARNING!!!"
-  echo "This will stop and delete all containers, images, and volumes for this Penpot project."
-  echo "Stack: ${STACK}"
-  echo ""
-  if [ "${MMD_CONFIRM_DESTROY:-}" = "1" ]; then
-    :
-  elif [ -t 0 ]; then
-    read -r -p "Press ctrl+c to abort or enter to continue." -n 1 || true
-    echo ""
-  else
-    print_error "Refusing destroy without a TTY. Set MMD_CONFIRM_DESTROY=1 to proceed."
-    exit 1
-  fi
-  compose down --rmi all --remove-orphans --volumes
-  echo "Project destroyed."
+project_volume_names() {
+  # $1: project name. Prints the fixed named-volume list for that project,
+  # one per line, matching docker-compose.yaml's top-level `volumes:` block.
+  local project="$1"
+  printf '%s\n' \
+    "${project}_penpot_postgres_v15" \
+    "${project}_penpot_assets" \
+    "${project}_open_design_data" \
+    "${project}_open_design_home"
 }
 
-is_toolkit_root() {
-  local d="$1"
-  [ -n "$d" ] && [ -f "$d/install.sh" ] && [ -f "$d/bin/mmd" ] && [ -f "$d/docker-compose.yaml" ] \
-    && [ -d "$d/.cursor/skills/mmd-setup" ]
+require_destructive_confirmation() {
+  # $1: command label (e.g. "destroy"). $2: resolved project name to bind
+  # the confirmation phrase to. $3: bypass env var name for this command
+  # only — never cross-accepted by a sibling destructive command. Remaining
+  # args: one or more stack roots this identity covers (printed in the
+  # warning so every project being removed is explicitly named).
+  local label="$1"
+  local project="$2"
+  local bypass_var="$3"
+  shift 3
+  local roots=("$@")
+  local bypass_value="${!bypass_var:-}"
+  echo ""
+  echo "WARNING!!!"
+  echo "This will ${label} the following stack:"
+  if [ "${#roots[@]}" -gt 1 ]; then
+    echo "  Roots:"
+    local r
+    for r in "${roots[@]}"; do
+      echo "    - $r"
+    done
+  else
+    echo "  Root:    ${roots[0]}"
+  fi
+  echo "  Project: ${project}"
+  echo "Named volumes at risk:"
+  project_volume_names "$project" | sed 's/^/  - /'
+  echo ""
+  echo "No complete backup/restore path exists yet for these volumes; \`mmd backup\` covers PostgreSQL data only."
+  echo ""
+  if [ -t 0 ]; then
+    read -r -p "Type the project name (${project}) to confirm ${label}, or anything else to abort: " reply || reply=""
+    if [ "$reply" != "$project" ]; then
+      print_error "Confirmation did not match; aborting ${label}."
+      exit 1
+    fi
+    return 0
+  fi
+  if [ "$bypass_value" = "1" ]; then
+    return 0
+  fi
+  print_error "Refusing ${label} without a TTY. Set ${bypass_var}=1 to proceed."
+  exit 1
+}
+
+cmd_destroy() {
+  require_compose_file
+  require_destructive_confirmation "destroy" "$PROJECT_NAME" "MMD_CONFIRM_DESTROY" "$STACK"
+  compose down --rmi all --remove-orphans --volumes
+  echo "Project destroyed."
 }
 
 rm_if_exists() {
@@ -753,26 +849,38 @@ rm_if_exists() {
 }
 
 destroy_compose_at() {
+  # $1: target stack root. $2: "1" when that root came from an explicit
+  # MMD_STACK_ROOT, "0" otherwise. Derives this root's own project identity
+  # (not the caller's $PROJECT_NAME) since this can be invoked against
+  # $share_stack, which may differ from $STACK.
   local root="$1"
+  local explicit="${2:-0}"
   if [ ! -f "$root/docker-compose.yaml" ]; then
     return 0
   fi
   if ! command -v docker >/dev/null 2>&1; then
-    print_info "Docker not found; skipping compose destroy in $root"
-    return 0
+    print_error "Docker not found; cannot destroy compose project in $root"
+    return 1
   fi
-  print_step "Destroying Compose project in $root (containers, images, volumes)..."
+  local root_project
+  root_project="$(derive_project_name "$root" "$explicit")"
+  print_step "Destroying Compose project '$root_project' in $root (containers, images, volumes)..."
+  local rc
   set +e
   if [ -f "$root/penpot.env" ]; then
-    docker compose -p "$PROJECT_NAME" -f "$root/docker-compose.yaml" \
+    docker compose -p "$root_project" -f "$root/docker-compose.yaml" \
       --env-file "$root/penpot.env" --project-directory "$root" \
       down --rmi all --remove-orphans --volumes
   else
-    docker compose -p "$PROJECT_NAME" -f "$root/docker-compose.yaml" \
+    docker compose -p "$root_project" -f "$root/docker-compose.yaml" \
       --project-directory "$root" down --rmi all --remove-orphans --volumes
   fi
+  rc=$?
   set -e
-  return 0
+  if [ "$rc" -ne 0 ]; then
+    print_error "compose down failed for project '$root_project' in $root"
+  fi
+  return "$rc"
 }
 
 remove_user_penpot_mcp() {
@@ -847,6 +955,7 @@ cmd_uninstall() {
   local skills_root="${MMD_SKILLS_ROOT:-${HOME}/.cursor/skills}"
   local agents_root="${HOME}/.cursor/agents"
   local name toolkit_guess agents_guess out
+  local stack_project share_project
 
   if [ -z "${HOME:-}" ] || [ ! -d "$HOME" ]; then
     print_error "HOME is not set"
@@ -865,28 +974,33 @@ cmd_uninstall() {
   fi
 
   echo ""
-  echo "WARNING!!!"
-  echo "This will destroy the Penpot Compose project (containers, images, volumes)"
-  echo "and remove the MMD Skills machine install:"
+  echo "This will also remove the MMD Skills machine install:"
   echo "  $bin_link"
   echo "  $share_stack"
   echo "  managed skills under $skills_root"
   echo "  managed agents under $agents_root"
   echo "Keeps rosey/ and other ~/.cursor skills/agents."
-  echo ""
-  if [ "${MMD_CONFIRM_UNINSTALL:-}" = "1" ] || [ "${MMD_CONFIRM_DESTROY:-}" = "1" ]; then
-    :
-  elif [ -t 0 ]; then
-    read -r -p "Press ctrl+c to abort or enter to continue." -n 1 || true
-    echo ""
-  else
-    print_error "Refusing uninstall without a TTY. Set MMD_CONFIRM_UNINSTALL=1 to proceed."
-    exit 1
-  fi
 
-  destroy_compose_at "$STACK"
-  if [ "$STACK" != "$share_stack" ]; then
-    destroy_compose_at "$share_stack"
+  stack_project="$(derive_project_name "$STACK" "$MMD_STACK_ROOT_WAS_EXPLICIT")"
+  share_project="$(derive_project_name "$share_stack" 0)"
+
+  if [ "$STACK" = "$share_stack" ] || [ "$stack_project" = "$share_project" ]; then
+    require_destructive_confirmation "uninstall" "$stack_project" "MMD_CONFIRM_UNINSTALL" "$STACK" "$share_stack"
+    if ! destroy_compose_at "$STACK" "$MMD_STACK_ROOT_WAS_EXPLICIT"; then
+      print_error "Compose teardown failed; aborting uninstall before removing local files."
+      exit 1
+    fi
+  else
+    require_destructive_confirmation "uninstall" "$stack_project" "MMD_CONFIRM_UNINSTALL" "$STACK"
+    if ! destroy_compose_at "$STACK" "$MMD_STACK_ROOT_WAS_EXPLICIT"; then
+      print_error "Compose teardown failed; aborting uninstall before removing local files."
+      exit 1
+    fi
+    require_destructive_confirmation "uninstall" "$share_project" "MMD_CONFIRM_UNINSTALL" "$share_stack"
+    if ! destroy_compose_at "$share_stack" 0; then
+      print_error "Compose teardown failed; aborting uninstall before removing local files."
+      exit 1
+    fi
   fi
 
   toolkit_guess="$(cd "$skills_root/../.." 2>/dev/null && pwd -P || true)"

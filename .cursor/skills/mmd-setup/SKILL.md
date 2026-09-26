@@ -35,7 +35,7 @@ If `mmd` is on `PATH`, use that. Otherwise use `"$MMD"`.
 If `$SKILLS/mmd-setup` is not installed, tell the user to run the toolkit installer once on this machine:
 
 ```bash
-/path/to/mmd-skills/install.sh
+curl -fsSL https://raw.githubusercontent.com/LuisAlejandro/mmd-skills/develop/install.sh | bash
 ```
 
 Do not copy Compose or skills into the app.
@@ -50,8 +50,8 @@ Do not copy Compose or skills into the app.
 | Health + CLIs + runnable table | `"$MMD" doctor` |
 | Pause | `"$MMD" stop` |
 | Remove containers, keep volumes | `"$MMD" down` |
-| Wipe this stack’s volumes | `"$MMD" destroy` (confirm first). Does not uninstall the CLI or skills |
-| Uninstall the machine pack | `"$MMD" uninstall` (confirm first; `MMD_CONFIRM_UNINSTALL=1`). Implies destroy, then removes `~/.local/bin/mmd`, `~/.local/share/mmd-skills`, and named managed skills/agents under `~/.cursor`. Keeps `rosey/` |
+| Wipe this stack’s volumes | `"$MMD" destroy` — prints the stack, project name, and every named volume at risk, then requires typing the exact project name to confirm (`MMD_CONFIRM_DESTROY=1` non-interactively). Does not uninstall the CLI or skills |
+| Uninstall the machine pack | `"$MMD" uninstall` — same exact-name confirmation as `destroy`, with its own bypass (`MMD_CONFIRM_UNINSTALL=1`; `destroy`'s bypass does not authorize this). Destroys the Compose project(s), then removes `~/.local/bin/mmd`, `~/.local/share/mmd-skills`, and named managed skills/agents under `~/.cursor`. Keeps `rosey/` |
 
 Never run `docker system prune` against the whole machine.
 

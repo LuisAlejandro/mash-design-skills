@@ -20,18 +20,15 @@ Skip `od-design-system` when `rosey/design-system/DESIGN.md` or `rosey/designs/d
 
 ## Install (once per machine)
 
-From this toolkit clone:
-
 ```bash
-git clone <this-repo> /path/to/mmd-skills
-/path/to/mmd-skills/install.sh
+curl -fsSL https://raw.githubusercontent.com/LuisAlejandro/mmd-skills/develop/install.sh | bash
 ```
 
-That copies the Cursor skill pack into `~/.cursor/skills`, review agents into `~/.cursor/agents`, merges MCP `penpot-local` → `http://localhost:4401/mcp` and Context7 → `https://mcp.context7.com/mcp` into `~/.cursor/mcp.json`, and syncs the Compose stack to `~/.local/share/mmd-skills` (override with `MMD_STACK_ROOT`). It starts the stack unless OpenDesign already answers `/api/health`.
+That fetches the toolkit, copies the Cursor skill pack into `~/.cursor/skills`, review agents into `~/.cursor/agents`, merges MCP `penpot-local` → `http://localhost:4401/mcp` and Context7 → `https://mcp.context7.com/mcp` into `~/.cursor/mcp.json`, and syncs the Compose stack to `~/.local/share/mmd-skills` (override with `MMD_STACK_ROOT`). It starts the stack unless OpenDesign already answers `/api/health`.
 
 Then open **your app** in Cursor. Skills are already on this machine. Funnel output still lands in the app under `rosey/`.
 
-Re-run `install.sh` to update. Flags: `--check`, `--no-stack`, `--no-start`, `--no-agents`.
+Re-run the same curl to update. Flags: `curl -fsSL … | bash -s -- --no-start` (`--check`, `--no-stack`, `--no-agents`). From a clone, `./install.sh` still works.
 
 ## After install
 
@@ -63,16 +60,18 @@ No Make. From a clone: `./bin/mmd <command>`. After install, `mmd` may be on `PA
 | `mmd stop` | Stop containers |
 | `mmd down` | Stop and remove containers (keep volumes) |
 | `mmd restart` | Stop then start |
-| `mmd destroy` | Remove this project's containers, images, and volumes (asks first). Does not uninstall the CLI or skills |
-| `mmd uninstall` | Destroy the Compose project, then remove `~/.local/bin/mmd`, `~/.local/share/mmd-skills`, and the managed pack in `~/.cursor/skills` and `~/.cursor/agents`. Keeps `rosey/` |
+| `mmd destroy` | Remove this project's containers, images, and volumes. Prints the stack, project name, and every named volume at risk, then requires typing the exact project name to confirm (`MMD_CONFIRM_DESTROY=1` for non-interactive use). Does not uninstall the CLI or skills |
+| `mmd uninstall` | Destroy the Compose project(s), then remove `~/.local/bin/mmd`, `~/.local/share/mmd-skills`, and the managed pack in `~/.cursor/skills` and `~/.cursor/agents`. Same exact-name confirmation as `destroy`, with its own bypass (`MMD_CONFIRM_UNINSTALL=1`) that `destroy`'s bypass cannot satisfy. Keeps `rosey/` |
 | `mmd logs` | Follow logs |
 | `mmd status` | `compose ps` |
 | `mmd update` | Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins |
-| `mmd backup` | Dump Postgres into `backups/` |
+| `mmd backup` | Dump Postgres into `backups/`. PostgreSQL data only — does not cover Penpot assets, OpenDesign data, or OpenDesign home state; no restore path exists yet for those volumes |
 | `mmd doctor` | OpenDesign health, agent CLIs, runnable harness table |
 | `mmd convert` | Figma → Penpot via [figpot](https://github.com/betagouv/figpot) (optional; needs `.env`) |
 
-Compose project name is `penpot` so existing volumes keep working. The stack is loopback-only. Do not publish the fat OpenDesign image (`penpot-opendesign:local` contains vendor CLIs).
+Compose project name is `penpot` for the installed default share root and for an implicit clone-detected invocation, so existing volumes keep working. An explicit alternate `MMD_STACK_ROOT` derives its own stable project name instead, so distinct custom stack roots never collide under one Compose project. The stack is loopback-only. Do not publish the fat OpenDesign image (`penpot-opendesign:local` contains vendor CLIs).
+
+`penpot.env` and `.env` are created (and corrected on each `mmd setup`/`mmd auth`) with mode `0600` — owner read/write only. `docker compose config` (without `-q`) resolves and prints every interpolated secret in plaintext by design; do not paste its output into shared logs or issue reports.
 
 If the daemon is down, invoke the **mmd-setup** skill or run `mmd start`. Do not start a host `opendesign` process.
 

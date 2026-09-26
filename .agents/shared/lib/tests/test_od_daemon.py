@@ -7,9 +7,11 @@ from pathlib import Path
 SHARED = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SHARED))
 
+import od_daemon  # noqa: E402
 from od_daemon import (  # noqa: E402
     AGENT_UNAVAILABLE_HINT,
     DaemonConfig,
+    export_project,
     find_app_root,
     find_skills_root,
     find_stack_root,
@@ -302,3 +304,116 @@ def test_seed_studio_prefs_marks_onboarding_complete():
         "agentId": "cursor-agent",
         "privacyDecisionAt": 1700000000000,
     }
+
+
+def _stub_export(monkeypatch, files: list[dict], contents: dict[str, bytes]):
+    monkeypatch.setattr(od_daemon, "list_project_files", lambda project_id, *, config=None: files)
+
+    def _fake_read(project_id, file_path, *, config=None, binary=False):
+        return contents[file_path]
+
+    monkeypatch.setattr(od_daemon, "read_project_file", _fake_read)
+
+
+def test_export_project_writes_nested_files(tmp_path: Path, monkeypatch):
+    dest = tmp_path / "out"
+    files = [{"name": "assets/icon.svg", "type": "file"}]
+    _stub_export(monkeypatch, files, {"assets/icon.svg": b"<svg/>"})
+    written = export_project("proj", dest, config=DaemonConfig(
+        url="http://x", token="t", repo_root=None, env_path=None,
+    ))
+    assert written == ["assets/icon.svg"]
+    assert (dest / "assets" / "icon.svg").read_bytes() == b"<svg/>"
+
+
+def test_export_project_rejects_traversal_and_cleans_up(tmp_path: Path, monkeypatch):
+    dest = tmp_path / "out"
+    files = [
+        {"name": "assets/icon.svg", "type": "file"},
+        {"name": "../outside.txt", "type": "file"},
+    ]
+    _stub_export(monkeypatch, files, {
+        "assets/icon.svg": b"<svg/>",
+        "../outside.txt": b"nope",
+    })
+    cfg = DaemonConfig(url="http://x", token="t", repo_root=None, env_path=None)
+    try:
+        export_project("proj", dest, config=cfg)
+    except RuntimeError as exc:
+        assert "../outside.txt" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert not (tmp_path / "outside.txt").exists()
+    assert list(dest.rglob("*")) == []
+
+
+def test_export_project_rejects_absolute_path(tmp_path: Path, monkeypatch):
+    dest = tmp_path / "out"
+    files = [{"name": "/etc/passwd", "type": "file"}]
+    _stub_export(monkeypatch, files, {"/etc/passwd": b"nope"})
+    cfg = DaemonConfig(url="http://x", token="t", repo_root=None, env_path=None)
+    try:
+        export_project("proj", dest, config=cfg)
+    except RuntimeError as exc:
+        assert "/etc/passwd" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert list(dest.rglob("*")) == []
+
+
+def test_export_project_rejects_symlink_escape(tmp_path: Path, monkeypatch):
+    dest = tmp_path / "out"
+    dest.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (dest / "escape").symlink_to(outside, target_is_directory=True)
+    files = [{"name": "escape/payload.txt", "type": "file"}]
+    _stub_export(monkeypatch, files, {"escape/payload.txt": b"nope"})
+    cfg = DaemonConfig(url="http://x", token="t", repo_root=None, env_path=None)
+    try:
+        export_project("proj", dest, config=cfg)
+    except RuntimeError as exc:
+        assert "escape/payload.txt" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert not (outside / "payload.txt").exists()
+
+
+def test_export_project_rejects_name_resolving_to_dest_itself(tmp_path: Path, monkeypatch):
+    dest = tmp_path / "out"
+    files = [{"name": ".", "type": "file"}]
+    _stub_export(monkeypatch, files, {".": b"nope"})
+    cfg = DaemonConfig(url="http://x", token="t", repo_root=None, env_path=None)
+    try:
+        export_project("proj", dest, config=cfg)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_export_project_multi_file_partial_rejection_cleans_up_all(tmp_path: Path, monkeypatch):
+    dest = tmp_path / "out"
+    files = [
+        {"name": "a.txt", "type": "file"},
+        {"name": "b.txt", "type": "file"},
+        {"name": "../c.txt", "type": "file"},
+        {"name": "d.txt", "type": "file"},
+        {"name": "e.txt", "type": "file"},
+    ]
+    contents = {
+        "a.txt": b"a",
+        "b.txt": b"b",
+        "../c.txt": b"c",
+        "d.txt": b"d",
+        "e.txt": b"e",
+    }
+    _stub_export(monkeypatch, files, contents)
+    cfg = DaemonConfig(url="http://x", token="t", repo_root=None, env_path=None)
+    try:
+        export_project("proj", dest, config=cfg)
+    except RuntimeError as exc:
+        assert "../c.txt" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert list(dest.rglob("*")) == []
