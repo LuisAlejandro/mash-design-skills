@@ -1,6 +1,6 @@
 ---
 name: penpot-implement-design
-description: Translates Penpot designs into production-ready code and always runs review, sync, and polish. Use when implementing UI from Penpot (user has shape selected or provides shape id), when user mentions "implement design", "generate code". Discovers how to run the dev server (Makefile preferred, then docker compose, then yarn/pnpm/npm scripts) and the localhost:port URL if not provided; then runs penpot-design-reviewer, penpot-design-sync until aligned, and penpot-design-iterator. Requires Penpot MCP server connection.
+description: Translates Penpot designs into production-ready code and always runs review, sync, and polish. Use when implementing UI from Penpot (shape id from the import handoff or the user), when user mentions "implement design", "generate code". Discovers how to run the dev server (Makefile preferred, then docker compose, then yarn/pnpm/npm scripts) and the localhost:port URL if not provided; then runs penpot-design-reviewer, penpot-design-sync until aligned, and penpot-design-iterator. Requires Penpot MCP server connection.
 metadata:
   mcp-server: penpot-local
 ---
@@ -9,14 +9,14 @@ metadata:
 
 ## Overview
 
-This skill provides a structured workflow for translating Penpot designs into production-ready code with pixel-perfect accuracy. It uses the Penpot MCP (execute_code, export_shape) to get design context and visuals, and ensures 1:1 visual parity with the design.
+This skill provides a structured workflow for translating Penpot designs into production-ready code with pixel-perfect accuracy. It uses `penpot-local` (`penpot_get_shape`, `penpot_export_shape`) to get design context and visuals, and ensures 1:1 visual parity with the design.
 
 **Orchestration:** After completing implementation (Steps 1–7), you **always** obtain a live app URL (from the user or by discovering and starting the dev server—see Step 7b), then **orchestrate** in order: **penpot-design-reviewer** (Step 8), **penpot-design-sync** until aligned (Step 9), then **penpot-design-iterator** (Step 10 — up to 5 cycles; stop early when PNG + inventory align). **CRITICAL: Steps 8–10c are mandatory. Do NOT stop or end your turn after Step 7. Continue immediately to Step 8.** The only exception is if the dev server cannot be started and the URL cannot be determined — in that case, document what was tried and stop after Step 7.
 
 ## Prerequisites
 
-- Penpot MCP server (`penpot-local` or `user-penpot-local`) must be connected; the user must have their Penpot file connected to the MCP plugin
-- Target shape: `ROOT_BOARD_ID` / `shapeId` argument, or `.mash/designs/<page-slug>/penpot-import/handoff.json`, or a Penpot selection
+- Penpot MCP server (`penpot-local` or `user-penpot-local`) must be connected. Pass `fileId`, `pageId`, and `shapeId`. There is no plugin.
+- Target shape: `ROOT_BOARD_ID` / `shapeId` argument, or `.mash/designs/<page-slug>/penpot-import/handoff.json` (`fileId`, `pageId`, `rootBoardId`)
 - Live app URL is required for Steps 8–10; if the user does not provide it, you must discover how to run the dev server and infer the URL (Step 7b)
 - Project should have an established design system or component library (preferred)
 
@@ -28,19 +28,13 @@ This skill provides a structured workflow for translating Penpot designs into pr
 
 Resolve the target shape **in this order**. Do not wait for a Penpot click when an id is already known.
 
-1. Argument `ROOT_BOARD_ID` or `shapeId`.
-2. `.mash/designs/<page-slug>/penpot-import/handoff.json` `rootBoardId` (use the pipeline `pageSlug` when given; otherwise glob `.mash/designs/*/penpot-import/handoff.json`).
-3. Current Penpot selection (first shape).
+1. Argument `ROOT_BOARD_ID` or `shapeId`, plus `fileId` and `pageId` when given.
+2. `.mash/designs/<page-slug>/penpot-import/handoff.json` (`fileId`, `pageId`, `rootBoardId`). Use the pipeline `pageSlug` when given; otherwise glob `.mash/designs/*/penpot-import/handoff.json`.
+3. If `fileId` is missing, `penpot_list_teams`, `penpot_list_projects`, and `penpot_list_files`, then ask which file.
 
-Set `storage.targetShapeId` via `execute_code` **before** serialize:
+Record `targetShapeId`. If nothing resolves, ask the user for the shape id.
 
-```javascript
-storage.targetShapeId = "<resolved-uuid>";
-```
-
-If nothing resolves, ask the user to select the shape in Penpot or pass the id.
-
-**Identify the current page (execute_code):** Read `scripts/get-current-page.js` in this skill's directory and run it via Penpot MCP execute_code.
+**Identify the page:** `penpot_list_pages` with `fileId`. Use `pageId` from the handoff.
 
 **Page slug:** use `handoff.pageSlug` when present. Do **not** re-slugify the Penpot page title. Fall back to slugifying `pageName` only if there is no handoff.
 
@@ -50,7 +44,7 @@ Check whether this shape has been implemented before. Check **two files** in ord
 
 **1. Check the per-shape state file** (`.cursor/penpot-implement-state-<shapeId>.json`):
 
-Using the current selection's shape ID, check if `.cursor/penpot-implement-state-<shapeId>.json` exists. If it exists **and** contains a `completedAt` field → this is a **re-run** (incremental update mode). The state file contains:
+Using `targetShapeId` from Step 1, check if `.cursor/penpot-implement-state-<shapeId>.json` exists. If it exists **and** contains a `completedAt` field → this is a **re-run** (incremental update mode). The state file contains:
   - `implementedFiles` — files created/modified in the last run
   - `shapeToFile` — which Penpot shape IDs map to which project files
   - `designSnapshot` — the old shape tree for diffing in Step 2c
@@ -69,7 +63,7 @@ Set a flag `isIncrementalUpdate = true/false` to guide behavior in Steps 2c and 
 
 ### Step 1c: Classify Selection Scope
 
-Determine **what kind of thing** the user selected so Step 5 knows **where** to write code. Read `scripts/classify-selection.js` in this skill's directory and run it via Penpot MCP execute_code. It returns `isMainBoard`, `isPageRootChild`, `depthFromRoot`, `childCount`, and dimensions.
+Determine **what kind of thing** the target shape is so Step 5 knows **where** to write code. Call `penpot_get_shape` with `includeDescendants: false`. A shape whose parent is `00000000-0000-0000-0000-000000000000` is a top-level board (`isMainBoard`). A direct child of that board is `isPageRootChild`. `childCount` is the length of `shapes` when those entries are ids.
 
 Combine the classification result with the variant detection from Step 2 (run later) to assign one of three scopes. Until variant detection runs, tentatively assign based on the classification script alone; adjust after Step 2 if the shape turns out to be a component instance.
 
@@ -88,62 +82,47 @@ Rules are evaluated top-to-bottom; first match wins. Record the assigned `select
 
 ### Step 2: Fetch Design Context
 
-**Data reuse:** Before running the Penpot introspection scripts below, check for the handoff artifact at `.cursor/penpot-design-context.json` in the project root. If it exists, **read it and reuse its data** — skip invoking the `penpot-token-resolution` skill (the tokens are already resolved in the artifact), skip re-fetching library data, page structure, comments, and fonts. The artifact is page-keyed: use the `pages.<page-slug>` entry matching the selected shape's page for page-specific data (colors, fonts, comments). This file is written by `penpot-create-design-system` (Step 3b) and survives context window limits and cross-conversation invocations. If the file does not exist (this skill was invoked standalone), run all scripts below as normal, including the token resolution step. You still need to run the design-context script below for the _selected shape's_ layout/structure. Also reuse the library/component data when checking for component variants later in this step. The flows and shape-specific comments queries should still run (they are scoped to the selected shape).
+**Data reuse:** Before calling Penpot, check `.cursor/penpot-design-context.json`. If it exists, reuse it — skip `penpot-token-resolution` and skip re-fetching library data, page structure, comments, and fonts. Use the `pages.<page-slug>` entry for this page. This file is written by `penpot-create-design-system` (Step 3b). If it does not exist, call `penpot_get_file_snapshot` and `penpot-token-resolution`. You still call `penpot_get_shape` for this shape's layout. Reuse the snapshot's `flows` and `comments`.
 
-Call the Penpot MCP **execute_code** tool with the script in `scripts/serialize-shape.js` in this skill's directory. Read that file and run it via execute_code. It uses `storage.targetShapeId` (then selection). Use the returned object as your structured design data.
+Call `penpot_get_shape` with `fileId`, `pageId`, `shapeId` (`targetShapeId`), and `includeDescendants: true`. That object is the design context: fills, text `content`, layout, `appliedTokens`, and nested `shapes`.
 
 **Resolve tokens (separate step):**
 
-After the script above returns, read the `penpot-token-resolution` skill and follow its **shape** mode. The token names are already in `storage.tokenNamesToResolve`. Run the shape execute_code script from that skill. It returns `{ resolvedTokens, failedTokens }`. Merge these into the design context results from above.
+Read the `penpot-token-resolution` skill and follow its **shape** mode. Collect names from `appliedTokens`. It returns `{ resolvedTokens, failedTokens }`. Merge these into the design context.
 
-**Persist the target shape ID:** After the script above returns successfully, write the target shape ID and page context to `.cursor/penpot-implement-state-<shapeId>.json` (where `<shapeId>` is the target shape's UUID) so it survives MCP reconnections (which clear `storage`). Each shape gets its own state file, enabling concurrent implementations in different chat windows.
+**Persist the target shape ID:** Write the target shape ID and page context to `.cursor/penpot-implement-state-<shapeId>.json`. Each shape gets its own state file.
 
 ```json
 {
-  "targetShapeId": "<id from storage.targetShapeId>",
+  "fileId": "<file id>",
+  "pageId": "<page id>",
+  "targetShapeId": "<shape id>",
   "targetShapeName": "<name from designContext.name>",
-  "pageSlug": "<derived page slug>",
+  "pageSlug": "<page slug>",
   "pageName": "<page name from Step 1>",
   "startedAt": "<ISO timestamp>"
 }
 ```
 
-If `storage.targetShapeId` is lost in a subsequent execute_code call (MCP reconnected), read this file to restore the ID and set `storage.targetShapeId` in the next execute_code before proceeding. If the shape ID itself is unknown (both `storage` and in-memory state lost), glob for `.cursor/penpot-implement-state-*.json` files that have no `completedAt` field (i.e., still in-progress). If exactly one matches, use it. If multiple match, list them and ask the user which implementation to resume. This avoids interrupting the user to re-select the shape.
+If the shape id is unknown later, glob for `.cursor/penpot-implement-state-*.json` files that have no `completedAt` field. If exactly one matches, use its ids. If multiple match, ask which implementation to resume.
 
-- If the response contains `error`, ask the user to select a shape in Penpot and repeat.
-- Otherwise use the returned object (and `storage.targetShapeId` in subsequent execute_code calls if needed):
-  - **designContext** — layout, typography, colors, spacing, and structure
-  - **generatedCss** — treat as the source-of-truth CSS from Penpot; use it when writing styles instead of reconstructing from raw properties
-  - **generatedMarkup** — use as the structural HTML/SVG starting point, then adapt to the project's framework (e.g. React JSX, Vue template)
+- If the tool returns an error, ask the user for the shape id and repeat.
+- Otherwise use the returned object. Styles come from the shape: `fills`, text `content`, `fontFamily` / `fontSize` / `fontWeight`, and `layout`. Walk nested `shapes` in the order returned.
+- From the **penpot-token-resolution** skill (shape mode):
+  - **resolvedTokens** — token name → value map
+  - **failedTokens** — names that could not be resolved. If non-empty, warn the user and fall back to the raw fill, font, gap, or radius on the shape.
+- Additional fields:
+  - **content** on `type: "path"` — path commands. Inline as `<svg><path d="...">`, or export the shape as SVG when the path is complex.
+  - **bool-type** on `type: "bool"` — `union`, `difference`, `intersection`, or `exclusion`. Export as SVG via `penpot_export_shape`.
+  - **interactions** when present — trigger and action. Translate to code in Step 5.
 
-Write `{ generatedMarkup, generatedCss }` to `.mash/designs/<page-slug>/review/generated-baseline.json` so Steps 8–10 Playwright parity can serve Penpot markup as the baseline (not candidate HTML).
-- From the **penpot-token-resolution** skill (shape mode, run as a separate step after the script above):
-  - **resolvedTokens** — token name → value map; use for exact token-to-project-token mapping instead of matching by hex
-  - **failedTokens** — list of token names that could not be resolved (not found or API error). If non-empty, warn the user that these tokens will fall back to raw hex values from the design context. List the failed names so the user can investigate or accept the gap
-- Additional fields from the design context:
-  - **layout.childrenReversed** — when `true` (flex `dir` is `"column"` or `"row"`), the `children` array in the design context is in **reverse visual order** (first element in the array appears last visually). Reverse the array when generating HTML/JSX to produce correct visual ordering
-  - **pathContent** (on `type: "path"` nodes) — array of `PathCommand` objects representing the SVG path data. Use to inline custom vector shapes as `<svg><path d="...">` elements instead of requiring a raster export
-  - **svgContent** (on `type: "svg-raw"` nodes) — raw SVG markup embedded in the shape. Inline directly or extract as an SVG component
-  - **booleanType** (on `type: "bool"/"boolean"` nodes) — the boolean operation (`union`, `difference`, `intersection`, `exclude`). Export as SVG via `export_shape` since boolean ops are hard to reproduce in CSS
-  - **exportSettings** — designer-defined export presets (format, scale, suffix). Honor these when exporting assets rather than always using default params
-  - **interactions** — trigger + action pairs defining prototyping behavior. Translate to code in Step 5 (see "Interaction translation")
+The visual baseline for Steps 8–10 is the PNG from Step 3. Generated markup is advisory only when `.mash/designs/<page-slug>/review/generated-baseline.json` already exists.
 
-**Check for component variants and library mapping (execute_code):** After fetching design context, check whether the selected shape is a library component instance and whether it has variant siblings. Read `scripts/variant-detection.js` in this skill's directory and run it via Penpot MCP execute_code.
+**Component variants:** `penpot_get_shape` includes `componentInfo`. `penpot_list_components` with `includeLibraries: true` lists components and variant properties (`variantProperties`). Map those to component props or states. If the shape is not a component, scan sibling frames with `penpot_find_shapes` for names that share a base before `/`.
 
-> **API note:** The variant detection script uses methods (`isComponentInstance()`, `component()`, `isVariant()`, `variants.variantComponents()`, `variantProps`) that may not be available in all Penpot Plugin API versions. The script wraps each API probe in its own try/catch so failures are non-fatal. If `variantError` is returned, use the Penpot MCP `penpot_api_info` tool to look up the current Shape and LibraryComponent API, adjust method names, and retry before falling back to heuristic detection.
+**Prototyping flows:** `penpot_get_file_snapshot` returns `flows` (`id`, `name`, `startingFrame`, `pageId`). Map a flow to a route entry. Shape interactions, when present on the shape, become event handlers in Step 5.
 
-- **Check `apiMethodsAvailable`** to see which variant APIs were found. If key methods are missing, use `penpot_api_info` to look up the correct method names for the current API version and retry.
-- If `libraryMatch` is found, note the Penpot component name for mapping to an existing project component.
-- If `variantProperties` is non-empty, these are the variant property names (e.g. `["State", "Size"]`). Each variant in `variants` has a `props` map (e.g. `{ State: "hover", Size: "large" }`). Implement each variant as the appropriate CSS pseudo-class, component prop, or state.
-- The script first tries the proper Penpot Variants API. If the shape is not a library component or has no formal variants, it falls back to a heuristic: scanning sibling shapes under the same parent board whose base name (before `/` or `(`) matches, **and** whose type and dimensions are similar (within 50% tolerance). This avoids false positives like `Card/Header` and `Card/Footer` being treated as variants of each other. If heuristic detection is used, `variantDetection` will be `"heuristic"`.
-- If no variants are found but the design visually contains state variants, manually inspect sibling frames and implement the appropriate states.
-
-**Fetch prototyping flows (execute_code):** Penpot Flows define prototyping starting points and multi-step user journeys. Read `scripts/prototyping-flows.js` in this skill's directory and run it via Penpot MCP execute_code.
-
-- **flows** — prototyping flows on the current page. Each flow has a starting shape; map flows to route entry points or user journey starting screens.
-- **interactions** — flattened list of all interactions within the target shape tree, with trigger type, action type, destination shape/page, URL, or overlay target. Use this in Step 5 to generate event handlers, router links, modal triggers, etc.
-
-**Collect designer comments on target shape (execute_code):** Comments attached to or near the target shape carry designer intent, edge-case notes, and implementation instructions. Read `scripts/collect-shape-comments.js` in this skill's directory and run it via Penpot MCP execute_code.
+**Designer comments:** the same snapshot returns `comments`. Use threads whose position sits on the target shape. If the comment call fails, proceed — this is non-blocking.
 
 - If comments are found within the target shape's bounds, include their content as implementation context. Designer notes may specify: animation behavior, edge cases, conditional visibility, responsive overrides, or accessibility requirements.
 - If the comment API is unavailable, proceed without comments — this is non-blocking.
@@ -152,7 +131,7 @@ Write `{ generatedMarkup, generatedCss }` to `.mash/designs/<page-slug>/review/g
 
 After fetching the design context, create a snapshot for change detection on future re-runs.
 
-**Create the snapshot:** Read `scripts/create-design-snapshot.js` in this skill's directory and run it via Penpot MCP execute_code. It walks the target shape tree and returns a flat map of `{ shapes: { [shapeId]: properties }, rootShapeId, shapeCount }`. Each entry contains only diffable properties (fills, strokes, shadows, text, layout, dimensions, tokens, child order) — much lighter than the full design context.
+**Create the snapshot:** Flatten the `penpot_get_shape` tree into `{ shapes: { [shapeId]: { name, type, x, y, width, height, fills, layout, appliedTokens, characters } }, rootShapeId, shapeCount }`. Keep child order. This is the diffable snapshot.
 
 **If `isIncrementalUpdate` is true** (from Step 1b):
 
@@ -201,14 +180,14 @@ Control Inventory for "<shapeName>":
 
 ### Step 3: Capture Visual Reference
 
-Call the Penpot MCP **export_shape** tool with `shapeId` set to `storage.targetShapeId` (the UUID) and `format: "png"` (or `"svg"` if you prefer vector reference). Fall back to `shapeId: "selection"` only if the stored id is gone. Save the PNG under `.mash/designs/<page-slug>/review/penpot-export.png`. It is the visual baseline for Steps 8–10.
+Call `penpot_export_shape` with `fileId`, `pageId`, `shapeId` set to `targetShapeId`, and `format: "png"` (or `"svg"` for a vector reference). Save the PNG under `.mash/designs/<page-slug>/review/penpot-export.png`. It is the visual baseline for Steps 8–10.
 
 ### Step 4: Export Required Assets
 
-- From the design context (Step 2), identify any child shapes that are images (`type === 'image'`) or have image fills (`fills` with `fillImage`). For each such shape, call **export_shape** with that shape's `id` (use execute_code to get the shape by id if needed) and `format: "png"` or `"svg"`. For raw image data use `mode: "fill"` when exporting a shape that has an image fill.
-- **Path shapes** (`type === "path"`): If `pathContent` is available, convert the path commands to an SVG `<path d="...">` for inlining. If the path is complex or has fills/strokes that are hard to reproduce, export via **export_shape** as SVG instead.
-- **SvgRaw shapes** (`type === "svg-raw"`): Use `svgContent` from the design context directly as inline SVG. If missing, export via **export_shape** as SVG.
-- **Boolean shapes** (`type === "bool"/"boolean"`): Always export via **export_shape** as SVG — boolean operations (union, difference, intersection, exclude) are not reproducible in CSS alone.
+- From the design context (Step 2), identify any child shapes that are images (`type === "image"`) or have image fills. For each, call `penpot_export_shape` with that shape's `id` and `format: "png"` or `"svg"`.
+- **Path shapes** (`type === "path"`): If `content` is available, convert the path commands to an SVG `<path d="...">`. If the path is complex, export via `penpot_export_shape` as SVG.
+- **SvgRaw shapes** (`type === "svg-raw"`): Use the embedded SVG from the shape. If missing, export via `penpot_export_shape` as SVG.
+- **Boolean shapes** (`type === "bool"`): Always export via `penpot_export_shape` as SVG — boolean operations are not reproducible in CSS alone.
 - **Export presets**: If a shape has `exportSettings` (designer-defined export presets), honor those settings (format, scale, suffix) when exporting instead of using defaults.
 - Save exported assets into the project's asset directory. Do not add new icon packages; use only assets exported from the Penpot design.
 
@@ -416,7 +395,7 @@ Use this **checklist in order of preference** (most preferred first):
 
 **If the dev server cannot be started or the URL cannot be determined:** Note what you tried (Makefile targets, compose files, scripts) and why it failed. Stop after Step 7 and tell the user they can provide a live app URL or fix the dev setup to run the full review/sync flow.
 
-**Resuming later (Step 7c):** If you stopped after Step 7 and the user later provides a live app URL (or the dev server issue is resolved), resume directly from **Step 8** using the design context, exported image, and target shape id already gathered in Steps 1–3. Do **not** re-run Steps 1–7. If `storage.targetShapeId` was lost (e.g. MCP reconnection), first check `.cursor/penpot-implement-state-<shapeId>.json` for the persisted ID. If the shape ID itself is unknown, glob for `.cursor/penpot-implement-state-*.json` files without a `completedAt` field; if exactly one matches, use it. If multiple in-progress files exist, list them and ask the user which to resume. If found, restore the ID into `storage.targetShapeId` via execute_code and continue. Only ask the user to re-select the shape if no in-progress state file is found.
+**Resuming later (Step 7c):** If you stopped after Step 7 and the user later provides a live app URL (or the dev server issue is resolved), resume directly from **Step 8** using the design context, exported image, and target shape id already gathered in Steps 1–3. Do **not** re-run Steps 1–7. If the shape id is unknown, read `.cursor/penpot-implement-state-<shapeId>.json` or glob `penpot-implement-state-*.json` files without a `completedAt` field. If exactly one matches, use its `fileId`, `pageId`, and `targetShapeId`. If several match, ask which to resume.
 
 ### Step 8–10d: Review, sync, iterate, and surface gaps
 
@@ -426,4 +405,4 @@ Read **REVIEW-SYNC.md** in this skill's directory and follow its workflow starti
 
 **You MUST also pass the control inventory** (from Step 2d) to the review phase. The reviewer uses it to verify every design element was implemented.
 
-For examples, best practices, and troubleshooting (including design context too large, probe script reference), see REFERENCE.md in this skill's directory.
+For examples, best practices, and troubleshooting (including a design context that is too large), see REFERENCE.md in this skill's directory.

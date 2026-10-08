@@ -56,7 +56,7 @@ Never run `docker system prune` against the whole machine.
 1. Confirm `GET http://127.0.0.1:7457/api/health` and `mds doctor`.
 2. Penpot UI: http://localhost:9001 — log in with the local user from `mds setup`.
 3. If port 7457 is busy, tell the user that port is taken. The host Open Design desktop app uses 7456; this stack uses 7457.
-4. Activate the `penpot-local` MCP in Cursor (`user-penpot-local` is the same snippet in `~/.cursor/mcp.json`). This pack merges only that server. Context7 belongs to Mash Programming Skills.
+4. Reload the `penpot-local` stdio MCP in Cursor (`user-penpot-local` is the same snippet in `~/.cursor/mcp.json`). `mds setup` stores `PENPOT_ACCESS_TOKEN` and points that server at `~/.config/mash/headless`. No browser plugin. This pack merges only that server. Context7 belongs to Mash Programming Skills.
 5. Agent jobs: `"$MDS" setup` or `"$MDS" auth` writes provider keys to `$STACK/penpot.env`. `"$MDS" start` applies them and seeds the OpenDesign studio (`onboardingCompleted` + `agentId` from pick-agent) so http://127.0.0.1:7457 skips Cloud onboarding. Do not hand-edit the toolkit clone `penpot.env` and expect Compose to see it.
 
 ## Funnel skills

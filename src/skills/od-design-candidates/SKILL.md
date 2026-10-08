@@ -52,10 +52,11 @@ APP="$(pwd -P)"
 od_load "$APP"
 od_require_health
 
-python3 -m venv "${SKILLS}/od-design-candidates/.venv"
-"${SKILLS}/od-design-candidates/.venv/bin/pip" install -r "${SKILLS}/od-design-candidates/requirements.txt"
-"${SKILLS}/od-design-candidates/.venv/bin/playwright" install chromium
+PYTHON="${SKILLS}/od-design-candidates/.venv/bin/python"
+test -x "$PYTHON"
 ```
+
+The installer creates that virtualenv under `~/.config/mash/venvs/od-design-candidates` and symlinks it into each IDE copy, including Playwright Chromium. If `$PYTHON` is missing, re-run `install.sh`. Do not create a virtualenv inside the skill directory.
 
 If health fails, stop and tell the user to run `mds start` (or invoke the mash-design-setup skill). Do not start a sidecar daemon.
 

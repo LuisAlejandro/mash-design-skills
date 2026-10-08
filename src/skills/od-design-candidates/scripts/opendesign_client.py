@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -163,6 +164,7 @@ class OpenDesignClient:
             if isinstance(loaded, dict):
                 metadata = loaded
         body: dict[str, Any] = {
+            "id": f"od-{uuid.uuid4().hex[:16]}",
             "name": name,
             "pluginId": PLUGIN_ID,
             "designSystemId": design_system_id,

@@ -1,6 +1,6 @@
 # Security
 
-This stack is loopback-only: Penpot (`:9001`), Mailcatcher (`:1080`), the Penpot MCP server (`:4401`), and OpenDesign (`:7457`) all publish to `127.0.0.1` only. Do not expose any of these to the network. Compose flags such as `disable-email-verification` and `disable-secure-session-cookies` are for local Docker, not a public host.
+This stack is loopback-only: Penpot (`:9001`), Mailcatcher (`:1080`), and OpenDesign (`:7457`) all publish to `127.0.0.1` only. Do not expose any of these to the network. Compose flags such as `disable-email-verification` and `disable-secure-session-cookies` are for local Docker, not a public host. `penpot-local` is a stdio process on the host; it is not a published port.
 
 The stack refuses to start when `PENPOT_SECRET_KEY` is missing, empty, or the known Compose fallback value — run `mds setup` to generate one.
 

@@ -26,13 +26,13 @@
 
 ### Example 1: Implementing a Button Component
 
-User says: "Implement this button" and has the button component selected in Penpot.
+User says: "Implement this button" and passes the button shape id (or it is `rootBoardId` in the import handoff).
 
 **Actions:**
 
-1. Confirm selection in Penpot (user has the button frame selected).
-2. Run execute_code with the design-context script; receive layout, fills, typography, etc.
-3. Run export_shape(shapeId: stored UUID, format: "png") for visual reference.
+1. Resolve `fileId`, `pageId`, and `shapeId` from the argument or the handoff.
+2. Call `penpot_get_shape` with `includeDescendants: true` for layout, fills, and typography.
+3. Call `penpot_export_shape` with that id and `format: "png"` for the visual reference.
 4. Export any icon/image assets from child shapes if present.
 5. Check if project has existing button component; if yes, extend with new variant; if no, create using project conventions.
 6. Map Penpot colors to project design tokens (e.g., `primary-500`, `primary-hover`).
@@ -42,13 +42,13 @@ User says: "Implement this button" and has the button component selected in Penp
 
 ### Example 2: Building a Dashboard Layout
 
-User selects the dashboard frame in Penpot and says "Implement this dashboard."
+User passes the dashboard board id and says "Implement this dashboard."
 
 **Actions:**
 
-1. Run execute_code to get design context for the selected frame (may include nested children).
-2. Run export_shape for the full frame; if the context is large, use the same script (it serializes the whole tree under selection).
-3. Export all assets (logos, icons) from child shapes via export_shape.
+1. Call `penpot_get_shape` with `includeDescendants: true`. If the tree is large, set `maxDepth` to 2 and fetch children on demand.
+2. Call `penpot_export_shape` for the board PNG.
+3. Export logos and icons with `penpot_export_shape` on each child id.
 4. Build layout using project's layout primitives; implement each section with existing components where possible.
 5. Validate responsive behavior against the design context and exported image.
 
@@ -58,7 +58,7 @@ User selects the dashboard frame in Penpot and says "Implement this dashboard."
 
 ### Always Start with Context
 
-Never implement based on assumptions. Always run execute_code for design context and export_shape for visual reference first.
+Never implement based on assumptions. Call `penpot_get_shape` for design context and `penpot_export_shape` for the PNG first.
 
 ### Incremental Validation
 
@@ -80,18 +80,18 @@ When in doubt, prefer the project's design system patterns over literal Penpot t
 
 ### Issue: Design context is too large or deep
 
-**Cause:** The selected shape has many nested layers and the serialized context is huge.
-**Solution:** Ask the user to select a smaller frame, or in execute_code serialize only the top level and first layer of children, then fetch children on demand if needed. For a lightweight structural overview without full properties, use `penpotUtils.shapeStructure(shape, maxDepth)` (returns `{ id, name, type, children?, layout? }` per node); call it in execute_code with a small `maxDepth` (e.g. 3–5) to inspect the tree before deciding what to serialize.
+**Cause:** The target shape has many nested layers and the tree is huge.
+**Solution:** Call `penpot_get_shape` with a small `maxDepth` (3–5), or `penpot_find_shapes` with `isRoot: true` for a name list, then fetch children on demand. Ask for a smaller board id when the tree is still too large.
 
 ### Issue: Design doesn't match after implementation
 
 **Cause:** Visual discrepancies between the implemented code and the Penpot design.
 **Solution:** Compare side-by-side with the exported image from Step 3. Check spacing, colors, and typography in the design context object.
 
-### Issue: No shape selected
+### Issue: Shape id is missing
 
-**Cause:** execute_code returns `{ error: 'No shape selected in Penpot' }`.
-**Solution:** Ask the user to select the frame or component in Penpot and run again.
+**Cause:** No `shapeId` argument and no `rootBoardId` in `.mash/designs/*/penpot-import/handoff.json`.
+**Solution:** Ask the user for the shape id. There is no Penpot selection.
 
 ### Issue: Design token values differ from Penpot
 
@@ -115,5 +115,5 @@ By following this workflow, you ensure that every Penpot design is implemented w
 
 ## Additional Resources
 
-- Penpot MCP: use `penpot_api_info` for Plugin API documentation
-- Penpot design tokens: in execute_code, use `penpot.library.local.tokens` to inspect token sets
+- Penpot file library: `penpot_get_file_snapshot` returns colors, typographies, token sets, and resolved tokens
+- Shape tokens: `appliedTokens` on `penpot_get_shape`

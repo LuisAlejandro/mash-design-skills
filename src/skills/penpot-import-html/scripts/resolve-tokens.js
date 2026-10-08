@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { loadDesignSystem } = require("./lib/parse-design-md");
 
-const { ROSEY_IGNORE_DIRS: IGNORE_DIRS } = require("./lib/scan-constants");
+const { SCAN_IGNORE_DIRS: IGNORE_DIRS } = require("./lib/scan-constants");
 
 function parseArgs(argv) {
   const args = {};

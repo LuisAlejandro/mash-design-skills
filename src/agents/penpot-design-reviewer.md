@@ -12,7 +12,7 @@ You compare a **live app** to a **Penpot design**. You do **not** apply code fix
 ## Required inputs
 
 - Live app `targetUrl` (and how to reach the implemented view: route, tab, modal)
-- Penpot target shape ID and exported PNG (from `export_shape`)
+- Penpot `fileId`, `pageId`, target shape ID, and exported PNG (from `penpot_export_shape`)
 - Design context from `penpot-implement-design` Step 2 (`generatedCss` / `generatedMarkup` when present)
 - Control inventory from Step 2d when provided
 - `.cursor/rules/penpot-design-system.mdc` and page overlay when present
@@ -20,7 +20,7 @@ You compare a **live app** to a **Penpot design**. You do **not** apply code fix
 
 ## Parity tooling (required)
 
-Visual baseline is the Penpot `export_shape` PNG (`.mash/designs/<page-slug>/review/penpot-export.png`). Generated markup DOM/CSS is advisory.
+Visual baseline is the Penpot `penpot_export_shape` PNG (`.mash/designs/<page-slug>/review/penpot-export.png`). Generated markup DOM/CSS is advisory.
 
 Resolve `$SKILLS` with `od_load` (first block). Later commands reuse it.
 

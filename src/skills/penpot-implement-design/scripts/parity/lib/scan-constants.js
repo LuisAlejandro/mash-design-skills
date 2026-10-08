@@ -1,5 +1,5 @@
 /** Directories excluded from project architecture scans and token walks. */
-const ROSEY_IGNORE_DIRS = new Set([
+const SCAN_IGNORE_DIRS = new Set([
   ".git",
   ".next",
   ".turbo",
@@ -11,4 +11,4 @@ const ROSEY_IGNORE_DIRS = new Set([
   ".github",
 ]);
 
-module.exports = { ROSEY_IGNORE_DIRS };
+module.exports = { SCAN_IGNORE_DIRS };

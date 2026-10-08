@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { extractExports, extractProps } = require("./lib/ast-exports");
 const { loadPathAliases, computeImportPath, resolveAliasImport } = require("./lib/project-paths");
-const { ROSEY_IGNORE_DIRS: IGNORE_DIRS } = require("./lib/scan-constants");
+const { SCAN_IGNORE_DIRS: IGNORE_DIRS } = require("./lib/scan-constants");
 
 const COMPONENT_HINTS = {
   button: ["button"],

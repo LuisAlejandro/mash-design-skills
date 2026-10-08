@@ -11,7 +11,8 @@ toolkit_root_ok() {
   local d="$1"
   [ -n "$d" ] && [ -d "$d" ] && \
     [ -f "$d/install.sh" ] && [ -f "$d/docker-compose.yaml" ] && \
-    [ -d "$d/src/skills/mash-design-setup" ]
+    [ -d "$d/src/skills/mash-design-setup" ] && \
+    [ -f "$d/headless/src/server.ts" ]
 }
 
 bootstrap_from_github() {
@@ -123,7 +124,7 @@ if [ ! -f "$SOURCE_ROOT/scripts/od_daemon.py" ] || [ ! -f "$SOURCE_ROOT/scripts/
   echo "Error: No scripts/od_daemon.py in $SOURCE_ROOT" >&2
   exit 1
 fi
-for required in docker-compose.yaml penpot.env.example bin/mds docker/opendesign/Dockerfile uninstall.sh; do
+for required in docker-compose.yaml penpot.env.example bin/mds docker/opendesign/Dockerfile uninstall.sh headless/src/server.ts headless/package.json; do
   if [ ! -e "$SOURCE_ROOT/$required" ]; then
     echo "Error: missing toolkit file: $SOURCE_ROOT/$required" >&2
     exit 1
@@ -324,18 +325,72 @@ if [ "$CREATE_AGENTS" = true ]; then
   done < "$AGENT_LIST"
 fi
 
+install_headless() {
+  local dest="$MASH_CONFIG_DIR/headless"
+  if [ ! -f "$SOURCE_ROOT/headless/package.json" ]; then
+    echo "Error: $SOURCE_ROOT/headless is missing. The toolkit checkout must include it." >&2
+    exit 1
+  fi
+  echo "-> Installing headless Penpot server to $dest..."
+  mkdir -p "$dest"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude node_modules \
+      --exclude dist \
+      --exclude .git \
+      "$SOURCE_ROOT/headless/" "$dest/"
+  else
+    find "$dest" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+    tar -C "$SOURCE_ROOT/headless" --exclude node_modules --exclude dist --exclude .git -cf - . \
+      | tar -C "$dest" -xf -
+  fi
+  install_npm_deps "$dest" "headless"
+  if [ ! -x "$dest/node_modules/.bin/tsc" ]; then
+    echo "   warning: headless dependencies are missing; penpot-local cannot start" >&2
+    return 0
+  fi
+  echo "-> Building headless Penpot server..."
+  (cd "$dest" && npm run build) || echo "   warning: headless build failed (continuing)" >&2
+}
+
 merge_mcp() {
   local dest="${HOME}/.cursor/mcp.json"
+  local server="$MASH_CONFIG_DIR/headless/dist/server.js"
+  local node_bin env_file
+  node_bin="$(command -v node || echo node)"
+  env_file="$STACK_ROOT/penpot.env"
   mkdir -p "${HOME}/.cursor"
-  python3 - "$dest" <<'PY'
+  python3 - "$dest" "$server" "$node_bin" "$env_file" <<'PY'
 import json, sys
 from pathlib import Path
 
 dest = Path(sys.argv[1])
+server = sys.argv[2]
+node_bin = sys.argv[3]
+env_file = Path(sys.argv[4])
+
+def load_env(path: Path) -> dict:
+    values = {}
+    if not path.is_file():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+    return values
+
+env = load_env(env_file)
 managed = {
     "penpot-local": {
-        "url": "http://localhost:4401/mcp",
-        "type": "http",
+        "command": node_bin,
+        "args": [server],
+        "env": {
+            "PENPOT_BASE_URL": "http://localhost:9001",
+            "PENPOT_ACCESS_TOKEN": env.get("PENPOT_ACCESS_TOKEN", ""),
+            "PENPOT_LOGIN_EMAIL": env.get("PENPOT_LOCAL_EMAIL", ""),
+            "PENPOT_LOGIN_PASSWORD": env.get("PENPOT_LOCAL_PASSWORD", ""),
+        },
     },
 }
 data = {}
@@ -355,13 +410,6 @@ servers.update(managed)
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 }
-
-echo "-> Merging penpot-local into ~/.cursor/mcp.json..."
-if command -v python3 >/dev/null 2>&1; then
-  merge_mcp
-else
-  echo "   warning: python3 not found; merge penpot-local by hand" >&2
-fi
 
 link_shared_skill_dep() {
   local target="$1" link="$2"
@@ -554,6 +602,16 @@ if [ "$SYNC_STACK" = true ]; then
 fi
 
 write_manifest
+
+echo "-> Headless Penpot server..."
+install_headless
+
+echo "-> Merging penpot-local into ~/.cursor/mcp.json..."
+if command -v python3 >/dev/null 2>&1; then
+  merge_mcp
+else
+  echo "   warning: python3 not found; merge penpot-local by hand" >&2
+fi
 
 echo ""
 echo "Mash Design Skills installed ($INSTALL_VERSION)"

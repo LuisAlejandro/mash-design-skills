@@ -103,8 +103,8 @@ User says: "Create design system rules for my React project"
 
 ## Penpot Implementation Flow
 
-1. Get design context via Penpot MCP execute_code for the selected shape
-2. Use export_shape for visual reference
+1. Get design context via `penpot_get_shape` for the shape id
+2. Use `penpot_export_shape` for the PNG
 3. Map Penpot colors to Tailwind colors defined in `tailwind.config.js`
 4. Reuse components from `src/components/ui/` when possible
 5. Validate against exported image before completing
@@ -118,7 +118,7 @@ User says: "Create design system rules for my React project"
 
 ## Asset Rules
 
-- Export images from Penpot via export_shape; store in `public/assets/`
+- Export images from Penpot via `penpot_export_shape`; store in `public/assets/`
 - DO NOT install new icon libraries when assets exist in the design
 ```
 
@@ -155,7 +155,7 @@ User says: "Set up Penpot rules for my Vue app"
 
 ## Penpot Implementation Flow
 
-1. Get design context via execute_code and export_shape for the selected shape
+1. Get design context via `penpot_get_shape` and `penpot_export_shape` for the shape id
 2. Translate to Vue 3 Composition API
 3. Map Penpot colors to CSS variables in `src/styles/tokens.css`
 4. Use CSS Modules for component styles
@@ -214,7 +214,7 @@ User says: "Generate rules for our design system library"
 
 ## Penpot Integration
 
-1. Get design context (execute_code) and export (export_shape) from Penpot
+1. Get design context (`penpot_get_shape`) and export (`penpot_export_shape`) from Penpot
 2. Map Penpot tokens to design system tokens
 3. Create or extend component in design system package
 4. Add Storybook stories showing all variants
@@ -329,5 +329,5 @@ The time invested in creating good rules pays off exponentially across every Pen
 
 ## Additional Resources
 
-- Penpot Plugin API: use the Penpot MCP `penpot_api_info` tool for API documentation
-- Penpot design tokens: use `penpot.library.local.tokens` in execute_code to inspect token sets
+- Penpot file library: `penpot_get_file_snapshot` returns colors, typographies, and resolved tokens
+- Shape reads: `penpot_get_shape` with `fileId`, `pageId`, and `shapeId`

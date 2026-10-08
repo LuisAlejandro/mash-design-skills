@@ -13,7 +13,7 @@ You apply **code fixes** so the live UI matches Penpot. You do not re-implement 
 
 - Reviewer report (Step 8), including Playwright parity findings when present
 - Live app `targetUrl`
-- Target shape UUID (re-export with `export_shape`; fallback `selection` only if id is gone)
+- `fileId`, `pageId`, and target shape UUID (re-export with `penpot_export_shape`)
 - Design context (`generatedMarkup` / `generatedCss`) + `.cursor/rules/penpot-design-system.mdc` / page overlay
 - Files from `implementedFiles` / `shapeToFile` when present
 - Output path from parent when invoked by `penpot-design-iterator`

@@ -4,7 +4,7 @@ Entered from `penpot-implement-design` after Step 7c. Prerequisites: design cont
 
 **CRITICAL:** Do not stop until Steps 8–10d finish. Pass the control inventory into the reviewer.
 
-Persist Step 2 `generatedMarkup` and `generatedCss` to `.mash/designs/<page-slug>/review/generated-baseline.json` (optional advisory DOM). Visual baseline is `.mash/designs/<page-slug>/review/penpot-export.png` from `export_shape`.
+Visual baseline is `.mash/designs/<page-slug>/review/penpot-export.png` from `penpot_export_shape` (`fileId`, `pageId`, `shapeId`). Generated markup in `generated-baseline.json` is advisory only when that file already exists.
 
 ## Route navigation
 
@@ -48,7 +48,7 @@ Repeat until the implementation matches the Penpot design or the user asks to st
 
 Invoke **penpot-design-sync** (or follow its workflow inline):
 
-1. **Design capture:** Re-export the shape with `export_shape` using the **stored target shape UUID**. Fall back to `shapeId: "selection"` only if the stored id is gone.
+1. **Design capture:** Re-export the shape with `penpot_export_shape` using the stored `fileId`, `pageId`, and `targetShapeId`.
 2. **Implementation capture:** Screenshot the current live UI.
 3. **Compare:** Layout, typography, colors, spacing, shadows, borders, icons, responsive behavior. Document each discrepancy: element, current, expected, severity, fix.
 4. **Implement fixes:** Apply code changes. Follow `.cursor/rules/penpot-design-system.mdc` and the page overlay. Targeted edits only.

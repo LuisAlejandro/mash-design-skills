@@ -70,14 +70,16 @@ Skills. This installer does not add or remove them.
 2. Copies `src/skills/` and `src/agents/` into the three IDE homes.
 3. Installs each skill's npm and Python dependencies once under
    `~/.config/mash/` and symlinks them into each copy.
-4. Merges `penpot-local` (`http://localhost:4401/mcp`) into `~/.cursor/mcp.json`.
+4. Copies `headless/` to `~/.config/mash/headless`, installs its npm
+   dependencies, and merges `penpot-local` as a stdio MCP into
+   `~/.cursor/mcp.json`.
 5. Syncs the Compose stack to `~/.local/share/mash/design`, writes
    `~/.config/mash/design-stack.json`, and links `mds`.
 6. Runs `mds setup` when `penpot.env` is missing, then `mds start` unless
    OpenDesign already answers `/api/health`.
 
-HTTP `:4401` is not enough. In Penpot, open the file and use **File → MCP
-Server → Connect**.
+`mds setup` stores a Penpot access token in `penpot.env` and points
+`penpot-local` at that token. No browser plugin is required.
 
 ## Requirements this pack does not install
 
@@ -166,7 +168,8 @@ a host Open Design app on `7456`.
 | `src/agents/` | Review, sync, and iterator agents |
 | `scripts/` | OpenDesign daemon helpers |
 | `bin/mds` | Stack lifecycle |
-| `docker-compose.yaml` | Penpot compose plus `open-design` on `127.0.0.1:7457` and MCP on `4401` |
+| `headless/` | Penpot stdio server (`penpot-local`) |
+| `docker-compose.yaml` | Penpot compose plus `open-design` on `127.0.0.1:7457` |
 | `docker/opendesign/` | Image `penpot-opendesign:local` |
 | `mcp.json.example` | `penpot-local` snippet for `~/.cursor/mcp.json` |
 | `penpot.env.example` | Instance version, public URI, OpenDesign token and API keys |

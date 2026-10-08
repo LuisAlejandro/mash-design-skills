@@ -23,9 +23,9 @@ These rules define how to translate Penpot designs into code for this project an
 
 ### Required Flow (do not skip)
 
-1. User must have the target shape selected in Penpot (or provide a shape id). Use Penpot MCP execute_code to get design context for the selection (layout, typography, colors, spacing, structure).
-2. Use export_shape (shapeId "selection", format png or svg) for a visual reference of the shape being implemented.
-3. Export any image fills or child image shapes via export_shape if needed; store in [ASSET_DIRECTORY].
+1. Use the shape id from the import handoff (`fileId`, `pageId`, `rootBoardId`) or the id the user passed. Call `penpot_get_shape` for layout, typography, colors, spacing, and structure.
+2. Call `penpot_export_shape` (`fileId`, `pageId`, `shapeId`, `format` png or svg) for a visual reference.
+3. Export image fills or child image shapes with `penpot_export_shape`; store them in [ASSET_DIRECTORY].
 4. Only after you have design context and exported visual, translate into this project's conventions, styles, and framework.
 5. Validate against the Penpot export for 1:1 look and behavior before marking complete.
 
@@ -69,7 +69,7 @@ Penpot interactions (NavigateTo, OpenOverlay, CloseOverlay, OpenUrl, PreviousScr
 
 ## Asset Handling
 
-- Use Penpot MCP export_shape to export image fills (mode "fill") or shapes as PNG/SVG
+- Use `penpot_export_shape` to export image fills or shapes as PNG/SVG
 - Store exported assets in `[ASSET_DIRECTORY]`
 - DO NOT import new icon packages; use assets exported from the Penpot design
 - DO NOT use placeholders when an asset can be exported from Penpot

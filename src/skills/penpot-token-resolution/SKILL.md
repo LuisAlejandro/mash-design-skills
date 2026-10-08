@@ -1,44 +1,46 @@
 ---
 name: penpot-token-resolution
-description: Resolves Penpot design tokens via the Penpot MCP (entire catalog or tokens used on a selected shape). Use when creating design system rules, implementing a Penpot shape, or when the user asks to list/resolve Penpot tokens. Requires Penpot MCP server connection.
+description: Resolves Penpot design tokens via the Penpot MCP (entire catalog or tokens used on a shape). Use when creating design system rules, implementing a Penpot shape, or when the user asks to list/resolve Penpot tokens. Requires Penpot MCP server connection.
 metadata:
   mcp-server: penpot-local
 ---
 
 # Penpot Token Resolution
 
-Resolve Penpot design tokens to concrete values through `execute_code`. Two modes:
+Resolve Penpot design tokens from the file library through `penpot-local`. Two modes:
 
-| Mode | When | Script |
-| ---- | ---- | ------ |
-| **catalog** | `penpot-create-design-system` Step 3 (file-wide mapping) | `scripts/resolve-catalog.js` |
-| **shape** | `penpot-implement-design` Step 2 (tokens on the selected tree) | `scripts/resolve-shape.js` |
+| Mode | When | Call |
+| ---- | ---- | ---- |
+| **catalog** | `penpot-create-design-system` Step 3 (file-wide mapping) | `penpot_get_file_snapshot` |
+| **shape** | `penpot-implement-design` Step 2 (tokens on one shape) | `penpot_get_shape` plus the snapshot's `library.resolvedTokens` |
 
 Do not invent token values. If a name cannot be resolved, put it in `failedTokens`.
 
-Use Penpot MCP `penpot-local` or `user-penpot-local`.
+Use Penpot MCP `penpot-local`. Pass `fileId`. There is no plugin.
 
-`penpotUtils.findTokenByName(name)` is the resolver. Do **not** use `token.resolvedValue` (API currently broken). Follow `{other.token}` references yourself (cap depth at 10).
+`penpot_get_file_snapshot` returns `library.resolvedTokens` and `library.failedTokens`. References such as `{other.token}` are followed to depth 10. Do not read a broken `resolvedValue` off a plugin token object.
 
 ## Catalog mode
 
-Read `scripts/resolve-catalog.js` and run it via Penpot MCP `execute_code`.
+Call `penpot_get_file_snapshot` with `fileId`.
 
-If `tokenOverview()` returns more than ~200 names, the script already batches in groups of 100. If it times out, rerun with a single token set name.
+Use:
 
-Returns `{ overview, setCount, themeCount, resolvedTokens, failedTokens }`.
+- `library.tokenSets` — set name and tokens
+- `library.themes` and `library.activeThemes`
+- `library.colors` and `library.typographies`
+- `library.resolvedTokens` — token name → value
+- `library.failedTokens` — names that did not resolve
 
 ## Shape mode
 
-Prerequisite: `penpot-implement-design` serialize-shape already set `storage.tokenNamesToResolve` (array of token names found on the tree).
+Call `penpot_get_shape` with `fileId`, `pageId`, and `shapeId`. Collect names from `appliedTokens` on that shape and its descendants.
 
-Read `scripts/resolve-shape.js` and run it via `execute_code`.
+Resolve each name from `library.resolvedTokens` on the snapshot. Names missing there go in `failedTokens`.
 
 Returns `{ resolvedTokens, failedTokens }`. Merge into the design context.
 
-If `storage.tokenNamesToResolve` is missing, collect names from `shape.tokens` on the target tree first, then resolve.
-
 ## Handling failures
 
-- Non-empty `failedTokens`: warn the user. Those tokens fall back to raw hex from the design context.
-- Token API missing: return `{ error }` and tell the caller to look up the current API with `penpot_api_info`.
+- Non-empty `failedTokens`: warn the user. Those tokens fall back to the raw fill, font, gap, or radius on the shape.
+- Snapshot missing `library`: the file has no token library yet. Proceed with library colors and raw shape values.

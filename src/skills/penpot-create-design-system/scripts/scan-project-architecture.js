@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const { ROSEY_IGNORE_DIRS: IGNORE_DIRS } = require("./lib/scan-constants");
+const { SCAN_IGNORE_DIRS: IGNORE_DIRS } = require("./lib/scan-constants");
 
 function parseArgs(argv) {
   const args = {};

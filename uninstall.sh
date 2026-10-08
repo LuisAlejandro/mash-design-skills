@@ -207,8 +207,12 @@ servers = data.get("mcpServers") if isinstance(data, dict) else None
 if not isinstance(servers, dict) or "penpot-local" not in servers:
     raise SystemExit(0)
 entry = servers.get("penpot-local")
-url = entry.get("url") if isinstance(entry, dict) else None
-if url != "http://localhost:4401/mcp":
+if not isinstance(entry, dict):
+    raise SystemExit(0)
+url = entry.get("url")
+args = entry.get("args") if isinstance(entry.get("args"), list) else []
+ours = url == "http://localhost:4401/mcp" or any(str(arg).endswith("headless/dist/server.js") for arg in args)
+if not ours:
     raise SystemExit(0)
 del servers["penpot-local"]
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -283,6 +287,7 @@ while IFS= read -r name; do
 done < <(manifest_list venv_skills)
 
 remove_penpot_mcp
+remove_path "$MASH_CONFIG_DIR/headless"
 remove_path "$PIN"
 remove_path "$BIN_LINK"
 remove_path "$MANIFEST"

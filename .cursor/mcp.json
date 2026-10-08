@@ -1,8 +1,14 @@
 {
   "mcpServers": {
     "penpot-local": {
-      "url": "http://localhost:4401/mcp",
-      "type": "http"
+      "command": "node",
+      "args": ["headless/dist/server.js"],
+      "env": {
+        "PENPOT_BASE_URL": "http://localhost:9001",
+        "PENPOT_ACCESS_TOKEN": "",
+        "PENPOT_LOGIN_EMAIL": "",
+        "PENPOT_LOGIN_PASSWORD": ""
+      }
     }
   }
 }

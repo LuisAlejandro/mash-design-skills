@@ -128,7 +128,7 @@ APP="$(pwd -P)"
 od_load "$APP"
 ```
 
-Penpot MCP (`penpot-local` or `user-penpot-local`) connected with the target file open.
+`penpot-local` stdio MCP connected. Import and implement pass `fileId` from the handoff. No browser plugin.
 
 ## Out of scope
 

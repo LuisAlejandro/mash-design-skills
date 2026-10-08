@@ -24,7 +24,7 @@ This file extends the base design system rules in `.cursor/rules/penpot-design-s
 
 | Shape Name | Shape ID | Notes |
 | ---------- | -------- | ----- |
-| [List shapes with image fills. These must be exported via export_shape during implementation.] |
+| [List shapes with image fills. Export them with penpot_export_shape during implementation.] |
 
 ## Component & Variant Mapping
 

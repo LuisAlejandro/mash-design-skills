@@ -27,11 +27,11 @@ If no mode token is present, set `INTERACTION_MODE=interactive`.
 ## Inputs
 
 - `pageSlug` — canonical slug from the pipeline / import handoff. Overlay filename is `penpot-ds-<page-slug>.mdc`. Do not re-slugify the Penpot page title when this is set.
-- Optional: `pageId` from import handoff. Match the open Penpot page via `penpotUtils.getPageById` when present.
+- Optional: `fileId` and `pageId` from import handoff.
 
 ## Prerequisites
 
-- Penpot MCP server (`penpot-local` or `user-penpot-local`) must be connected; user must connect their Penpot file to the MCP plugin
+- Penpot MCP server (`penpot-local` or `user-penpot-local`) must be connected. Pass `fileId`. There is no plugin.
 - Access to the project codebase for analysis
 - Understanding of your team's component conventions (or willingness to establish them)
 
@@ -53,9 +53,7 @@ Use this skill when:
 
 Before doing any work, check what already exists and identify the target page.
 
-**Determine the current Penpot page (execute_code):** Read `scripts/get-current-page.js` in this skill's directory and run it via Penpot MCP execute_code.
-
-If `pageId` from import handoff is set, switch to that page (`penpotUtils.getPageById`) before scanning.
+**Determine the current Penpot page:** `penpot_list_pages` with `fileId` from the import handoff. Use `pageId` from that handoff when it is set.
 
 Record `pageName` and `pageId`. **Page slug:** use the `pageSlug` argument or `.mash/designs/<page-slug>/penpot-import/handoff.json`. Do not re-slugify the Penpot page title when handoff/arg is present. Only if neither exists, derive a slug by lowercasing the page name and replacing non-alphanumeric characters with hyphens.
 
@@ -86,7 +84,7 @@ There is no Penpot MCP tool that returns a template. Use the template below as t
 
 - **General component rules:** Paths, naming, export pattern
 - **Styling rules:** CSS framework, design tokens location, spacing/typography scale
-- **Penpot integration rules:** Required flow (get design context via execute_code, export_shape for visual, then implement and validate)
+- **Penpot integration rules:** Required flow (`penpot_get_shape` for design context, `penpot_export_shape` for the PNG, then implement and validate)
 - **Asset handling:** Where to store exported images/SVGs from Penpot
 - **Project-specific conventions:** Architecture, imports, accessibility, etc.
 
@@ -163,11 +161,11 @@ Before generating rules, inspect the Penpot design file to understand design-sid
 
 **Inspect token catalog:**
 
-Read the `penpot-token-resolution` skill and follow its **catalog** mode. Run the catalog execute_code script from that skill. It returns `{ overview, setCount, themeCount, resolvedTokens, failedTokens }`.
+Read the `penpot-token-resolution` skill and follow its **catalog** mode. `penpot_get_file_snapshot` returns `library` (`tokenSets`, `themes`, `colors`, `typographies`, `resolvedTokens`, `failedTokens`).
 
-**Inspect component library, colors, and component variants (execute_code):** Read `scripts/inspect-library.js` in this skill's directory and run it via Penpot MCP execute_code.
+**Inspect component library:** `penpot_list_components` with `includeLibraries: true`, plus `library.colors` and `library.typographies` from the snapshot.
 
-**Scan page structure (execute_code):** Read `scripts/scan-page-structure.js` in this skill's directory and run it via Penpot MCP execute_code. Enumerate all pages and their top-level boards to understand the design file's organization. This reveals responsive breakpoint pages, component documentation pages, and page-to-route mappings.
+**Scan page structure:** `penpot_list_pages`, then `penpot_find_shapes` with `isRoot: true` on each page. That shows breakpoint pages, component pages, and page-to-route mappings.
 
 Use the results to identify:
 
@@ -175,22 +173,20 @@ Use the results to identify:
 - Pages that correspond to application routes (e.g., "Login", "Dashboard", "Settings")
 - Component documentation pages vs. actual design pages
 
-**Collect designer comments (execute_code):** Comments on shapes carry designer intent, edge-case notes, and implementation instructions. Read `scripts/collect-comments.js` in this skill's directory and run it via Penpot MCP execute_code.
+**Collect designer comments:** `comments` on `penpot_get_file_snapshot`.
 
-**Inspect available fonts on the current page (execute_code):** Discover which fonts are used on the current page so the page overlay can include font-loading instructions. Read `scripts/inspect-fonts.js` in this skill's directory and run it via Penpot MCP execute_code.
-
-**Scan colors used on the current page (execute_code):** Collect all fill colors, gradients, image fills, and shadows used on the current page. Read `scripts/scan-colors.js` in this skill's directory and run it via Penpot MCP execute_code.
+**Inspect fonts and colors on the page:** `penpot_get_shape` on the root board with `includeDescendants: true`. Read text `content` for font families and `fills` for colors, gradients, images, and shadows.
 
 Use the results to build the **page-specific** color mapping table in Step 4:
 
 - **Solid colors:** Map to project tokens using the file-wide token catalog and library colors.
 - **Gradients:** Include a gradient mapping section in the page overlay. Each gradient should map to a project CSS variable, Tailwind utility, or inline `linear-gradient`/`radial-gradient` definition. If the project uses CSS custom properties for gradients (e.g. `--gradient-primary`), map to those.
-- **Image fills:** List shapes with image fills so PID knows to export them via `export_shape`. Include `shapeId` for direct export.
+- **Image fills:** List shapes with image fills so implement can export them via `penpot_export_shape`. Include `shapeId`.
 - **Shadows:** Include a shadow mapping section in the page overlay. Each unique shadow should map to a project token (e.g. `--shadow-sm`, Tailwind `shadow-md`) or a raw CSS `box-shadow` value. Group similar shadows that differ only in color as variants of the same token.
 
 **Handling results:**
 
-- If the token script returns an `error`, use the Penpot MCP `penpot_api_info` tool to verify the current token/library API shape, adjust the script, and retry. If the API is unavailable, proceed without token mappings and note in the generated rules that the Color Mapping and Component Mapping tables should be filled manually once the Penpot library is established.
+- If the snapshot has no `library`, proceed without token mappings and note in the generated rules that the Color Mapping and Component Mapping tables should be filled once the Penpot library exists.
 - **If `failedTokens` is non-empty**, list them. In interactive mode, ask whether to proceed or investigate. In non-interactive mode, proceed and note the gaps in the overlay.
 - If the library is empty (no components, colors, or typographies), still generate the rule file. Leave the Color Mapping and Component & Variant Mapping tables as placeholders with a note: _"Fill these tables as the Penpot library is populated."_
 - If `availableLibraries` returns libraries not yet connected, note them in the generated rules so the team can decide whether to connect them for shared design system assets.
@@ -198,7 +194,7 @@ Use the results to build the **page-specific** color mapping table in Step 4:
 
 Use the results to:
 
-- Create a **color mapping table** between Penpot library colors and project design tokens (e.g., Penpot `Brand/Primary #0066FF` → project `var(--color-primary)` or Tailwind `text-blue-600`). Use **resolvedTokens** (token name → value from `penpotUtils.findTokenByName`) for precise token mapping when building this table.
+- Create a **color mapping table** between Penpot library colors and project design tokens (e.g., Penpot `Brand/Primary #0066FF` → project `var(--color-primary)` or Tailwind `text-blue-600`). Use **resolvedTokens** from the snapshot for the token name → value map.
 - Identify reusable Penpot components that map to existing project components
 - Note any Penpot token sets/themes that correspond to project themes (light/dark mode, brand variants)
 - Build a **page-to-route / page-to-breakpoint mapping** from the page structure scan
@@ -209,14 +205,12 @@ Include these mappings in the generated rules (Step 4).
 
 **Large file handling:**
 
-If the Penpot file is large (many pages, hundreds of tokens, or deep component hierarchies), the scripts above may return truncated data or time out. Apply these mitigations:
+If the Penpot file is large, narrow the reads:
 
-- **Token catalog:** The `penpot-token-resolution` skill (catalog mode) includes large-catalog guidance. If `tokenOverview()` returns more than ~200 token names, it resolves tokens in batches of 100.
-- **Page structure:** If the file has more than ~20 pages, limit the board scan to the first 20 pages. Note the omitted pages and let the user decide whether to scan more.
-- **Library components:** If the library has more than ~100 components, return only `name` and `id` (skip `source` enrichment) to reduce payload size. The full details can be fetched on demand during implementation.
-- **Font scan:** If `findShapes` is slow (file has thousands of shapes), scope the search to the current page (`penpot.root`) instead of all pages. Note that fonts on other pages may be missed.
-
-If any script times out, retry with the reduced scope described above before falling back to manual data entry.
+- **Token catalog:** `library.resolvedTokens` is already resolved. If it has more than ~200 names, record the rest as names only and resolve on demand during implementation.
+- **Page structure:** If the file has more than ~20 pages, `penpot_find_shapes` with `isRoot: true` on the first 20. Note the omitted pages.
+- **Library components:** If there are more than ~100, keep `name` and `componentId` in the handoff. Fetch a component's main instance with `penpot_get_shape` when implementing it.
+- **Fonts:** Read text from the current page's root board only. Note that fonts on other pages may be missed.
 
 ### Step 3b: Persist Handoff Artifact
 
@@ -308,9 +302,9 @@ After saving, tell the user which files were created or updated.
 After saving the rules (base + page overlay) and confirming to the user that design system rules are in place:
 
 1. **Ask the user:** "Design system rules are saved. Would you like to implement a Penpot shape now, or are you done for now?" If the user declines, stop here.
-2. **Check prerequisites:** The user must have the target shape **selected in Penpot** (or have provided the shape id). If not, ask the user to select the shape now and wait for confirmation before proceeding.
+2. **Check prerequisites:** Use `rootBoardId` from the import handoff, or a shape id the user passed. If neither exists, ask for the shape id.
 3. **Carry forward gathered data:** The handoff artifact written in Step 3b (`.cursor/penpot-design-context.json`) contains all Penpot introspection data. The implement skill will read it from disk, so it survives context window limits and cross-conversation invocations. The data is also in the current conversation context for immediate use. **Do not re-fetch it.** (See implement skill's "Data Reuse" note in Step 2.)
-4. **Invoke:** Once a selection is confirmed, **read the penpot-implement-design SKILL.md** (at the path provided in the agent skill list) **and follow its workflow starting at Step 1** in the same turn. Pass along any live app URL the user provided so it can run the full flow (review, sync, optional polish) after implementation.
+4. **Invoke:** Once the shape id is known, **read the penpot-implement-design SKILL.md** (at the path provided in the agent skill list) **and follow its workflow starting at Step 1** in the same turn. Pass `fileId`, `pageId`, `shapeId`, and any live app URL the user provided so it can run the full flow (review, sync, optional polish) after implementation.
 5. **Iterate rules later:** The implement skill tracks design system rule gaps during implementation (Step 10b). After its sync loop completes, it presents any gaps found and offers to update the `.mdc` files. Accept the updates to keep rules accurate across implementation cycles.
 
 For examples, best practices, and troubleshooting, see REFERENCE.md in this skill's directory.

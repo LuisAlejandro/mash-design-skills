@@ -24,7 +24,7 @@
 # WARNING: if you're exposing Penpot to the internet, you should remove the flags
 # 'disable-secure-session-cookies' and 'disable-email-verification'
 x-flags: &penpot-flags
-  PENPOT_FLAGS: disable-email-verification disable-onboarding disable-dashboard-templates-section enable-prepl-server disable-secure-session-cookies enable-mcp disable-registration
+  PENPOT_FLAGS: disable-email-verification disable-onboarding disable-dashboard-templates-section enable-prepl-server disable-secure-session-cookies enable-access-tokens disable-registration
 
 x-uri: &penpot-public-uri
   PENPOT_PUBLIC_URI: ${PENPOT_PUBLIC_URI:-http://localhost:9001}
@@ -92,7 +92,6 @@ services:
     depends_on:
       - penpot-backend
       - penpot-exporter
-      - penpot-mcp
 
     networks:
       - penpot
@@ -182,23 +181,6 @@ services:
       PENPOT_SMTP_TLS: "false"
       PENPOT_SMTP_SSL: "false"
 
-  penpot-mcp:
-    image: "penpotapp/mcp:${PENPOT_VERSION:-2.16.2}"
-    restart: always
-    # Image default is `node index.js --multi-user` (requires userToken).
-    # Single-user: Cursor uses http://localhost:4401/mcp with no token.
-    command: ["node", "index.js"]
-    # Official compose keeps this internal (frontend proxies /mcp/*).
-    # Publish HTTP/SSE so Cursor can consume a URL instead of docker exec.
-    ports:
-      - "127.0.0.1:4401:4401"
-    environment:
-      # Container default is localhost; bind all interfaces so the published port works.
-      PENPOT_MCP_SERVER_HOST: "0.0.0.0"
-      PENPOT_MCP_SERVER_LISTEN_ADDRESS: "0.0.0.0"
-    networks:
-      - penpot
-
   penpot-exporter:
     image: "penpotapp/exporter:${PENPOT_VERSION:-2.16.2}"
     restart: always
@@ -211,10 +193,11 @@ services:
       - penpot
 
     environment:
-      << : [*penpot-secret-key, *penpot-public-uri]
-      # Don't touch it; this uses an internal docker network to
-      # communicate with the frontend.
-      PENPOT_INTERNAL_URI: http://penpot-frontend:8080
+      << : [*penpot-secret-key]
+      # The exporter's browser loads render.html itself. Inside the
+      # compose network that host is the frontend, not the published
+      # localhost:9001 URI the browser on the host uses.
+      PENPOT_PUBLIC_URI: http://penpot-frontend:8080
 
       ## Valkey (or previously Redis) is used for the websockets notifications.
       PENPOT_REDIS_URI: redis://penpot-valkey/0
@@ -267,7 +250,7 @@ services:
   ## temporal solution while no real SMTP provider is configured.
 
   penpot-mailcatch:
-    image: sj26/mailcatcher:0.10.0
+    image: sj26/mailcatcher:v0.10.0
     restart: always
     expose:
       - '1025'

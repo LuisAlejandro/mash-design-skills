@@ -7,15 +7,15 @@ metadata:
 
 # Import HTML into Penpot
 
-Lock-in step: OpenDesign HTML is a sketch. This skill draws it into the **open Penpot file**. Downstream implement uses the Penpot board, not the HTML.
+Lock-in step: OpenDesign HTML is a sketch. This skill draws it into a Penpot file through `penpot-local`. Downstream implement uses the Penpot board, not the HTML.
 
 ## Overview
 
 Input: winner `.mash/designs/<page-slug>/source/index.html` (plus colocated assets).
 
-Output: a page in the connected Penpot file, a token set, a root board id, and `PENPOT_IMPORT_HANDOFF` with shape ids for `penpot-implement-design`.
+Output: a page in a Penpot file, a token set, a root board id, and `PENPOT_IMPORT_HANDOFF` with file, page, and shape ids for `penpot-implement-design`.
 
-Requires `penpot-local` or `user-penpot-local` MCP and an open file. Internal layout JSON is fine; do not write a user-facing YAML spec.
+Requires the `penpot-local` stdio MCP. Pass `fileId` into every tool. There is no plugin and no selection. Internal layout JSON is fine; do not write a user-facing YAML spec.
 
 For fills, gradients, strokes, shadows, text, resize, and error handling, read `REFERENCE.md` in this skill's directory.
 
@@ -34,7 +34,7 @@ APP="$(pwd -P)"
 od_load "$APP"
 ```
 
-Penpot MCP connected; target file open in the plugin.
+`penpot-local` is connected. Resolve `fileId` with `penpot_list_teams`, `penpot_list_projects`, and `penpot_list_files` when the user did not pass one.
 
 ## Workflow
 
@@ -57,66 +57,50 @@ node "${SKILLS}/penpot-import-html/scripts/html-to-layout.js" \
   --out "$OUT"
 ```
 
-Read `layout.json`. Abort if it is empty or missing `layout`.
-
-Copy selected shapes into `storage` immediately if you inspect the current page — selection is not stable.
+Read `layout.json`. Abort if it is empty or missing `layout`. Keep `shapeByLayoutId` in the handoff file, not in plugin storage.
 
 ### Step 2: Create the page
 
 The Penpot **page name is `meta.slug`** (`pageSlug`), not the HTML title. That keeps later slugification identical to the pipeline slug.
 
-If a page named `meta.slug` exists (`penpotUtils.getPageByName`), ask: use it (clear children of the root board first, with confirmation) or create `meta.slug (vN)`.
+Call `penpot_list_pages` with `fileId`. If a page named `meta.slug` exists, ask: use it (clear children of the root board first, with confirmation) or create `meta.slug (vN)` via `penpot_create_page`.
 
-Otherwise create a new page named `meta.slug`. Set page background from `tokens.palette[meta.background]`.
-
-Store `storage.pageId` and `storage.pageSlug` (`meta.slug`). Subsequent `execute_code` calls must target this page (`penpotUtils.getPageById`).
+Otherwise `penpot_create_page` named `meta.slug`. Record `pageId`.
 
 ### Step 3: Design tokens and library assets
 
-Generate execute_code scripts from `layout.json` (do not invent token loops):
+From `layout.json` tokens, call `penpot-local` tools. Do not invent a second token loop.
 
-```bash
-node "${SKILLS}/penpot-import-html/scripts/render/build-execute-code.js" \
-  --layout "$OUT" \
-  --out-dir "${APP}/.mash/designs/${PAGE_SLUG}/penpot-import/execute-code"
-```
+- `penpot_write_token_set` with `set.name` = `import-<page-slug>`. Map `tokens.palette` to `type: "color"`, `tokens.spacing` to `type: "spacing"` (string pixels), and typography sizes to `type: "font-size"`. Pass `theme: { name: "light", group: "", sets: ["import-<page-slug>"] }` and `activate: true`.
+- `penpot_add_library_color` once per palette entry (`name`, hex `color`).
+- `penpot_add_typography` once per typography entry (`fontFamily`, `fontSize` and `fontWeight` as strings, `lineHeight` as a string).
 
-Run via MCP `execute_code`, in order:
-
-- **3a** `create-tokens.js` — token set `import-<page-slug>`
-- **3b** `create-colors.js` — library colors from the palette
-- **3c** `create-typographies.js` — library typographies
-
-Activate the token set after creation (`set.toggleActive()` if needed). Token apply is async — sleep ~100ms before reading applied values.
-
-Store `storage.tokenSetName`.
+Record `tokenSetName` as `import-<page-slug>`.
 
 ### Step 4: Create the root board and walk the layout tree
 
-Create one root board named after `meta.name` (HTML title / board label) at 1440×(estimated height, minimum 900). Store `storage.rootBoardId`.
+`penpot_add_shapes` one root frame named `meta.name` at 1440×(estimated height, minimum 900), parent and frame `00000000-0000-0000-0000-000000000000`. Record `rootBoardId`.
 
-Walk `layout` depth-first. For each node:
+Walk `layout` depth-first. For each node call `penpot_add_shapes` with an explicit `id` when you need to parent the next node:
 
-1. Map type → Penpot create (`createBoard`, `createRectangle`, `createText`, `createEllipse` as needed). `row` / `column` / `board` → Board. `text` → Text. `image` → Rectangle with image fill when the asset can be imported; otherwise a named placeholder rectangle.
-2. `parent.insertChild(parent.children.length, shape)` — **never** `appendChild` (broken except flex). For flex `dir` `row`/`column`, children array is reversed vs visual order — use `board.appendChild(shape)` in **visual** order.
-3. Set `name`. Prefer tokens via `shape.applyToken(token, properties)` over raw fills.
-4. Dimensions: `resize(w, h)` then restore `growType` on text (`auto-width` / `auto-height`).
-5. Flex: `penpotUtils.addFlexLayout(container, dir)` when the container already has children. Padding/gap from `layout` object. Child `layoutChild` sizing `fill`/`auto`/`fix`.
-6. Text: `characters`, font from typography token, `fontSize`, weight, align.
-7. Hidden nodes: `shape.hidden = true`.
-8. Store `storage.shapeByLayoutId[node.id] = shape.id`.
+1. `row` / `column` / `board` → `type: "frame"`. `text` → `type: "text"`. `image` → `type: "image"` after `penpot_upload_media`, or a named `rect` placeholder.
+2. Set `parentId` and `frameId` to the parent frame. Pass `x` and `y` inside that parent. Do not reorder children after the fact unless `penpot_reorder_shapes` is required.
+3. After the shape exists, `penpot_apply_tokens` for fill, font, gap, or radius when `layout.json` names a token. The tool writes `applied-tokens` and the resolved value together.
+4. Set width and height on the shape. Text `growType` is `auto-width`, `auto-height`, or `fixed`.
+5. Frames: pass `layout` (`type: "flex"`, `dir` `row` or `column`, `rowGap`, `columnGap`, `padding`) on create. Children use `layoutItem.horizontalSizing` / `verticalSizing` of `fill`, `auto`, or `fix`.
+6. Text: `characters`, `fontFamily`, `fontSize`, `fontWeight`.
+7. Hidden nodes: `hidden: true`.
+8. Record `shapeByLayoutId[node.id] = shape.id`.
 
-Do not use `parentX`/`parentY` writes; use `penpotUtils.setParentXY`.
-
-If payload is too large, render one top-level section per `execute_code` call and keep IDs in `storage`.
+If the payload is large, one `penpot_add_shapes` call per top-level section. Keep ids in the handoff.
 
 ### Step 5: Images
 
-For each `assets` entry, import if MCP import is available; otherwise create a named rectangle (`image:<name>`) and list it in the handoff as a placeholder.
+For each asset, `penpot_upload_media` then an image shape. If upload fails, create a named rectangle (`image:<name>`) and list it in the handoff as a placeholder.
 
 ### Step 6: Cross-check
 
-Re-read the page with `penpotUtils.shapeStructure(page.root, 3)`. Compare section count and names to `layout.json`. Fix mismatches.
+`penpot_get_shape` on `rootBoardId` with `includeDescendants: true` and `maxDepth: 3`. Compare section count and names to `layout.json`. Fix mismatches with `penpot_update_shapes`.
 
 If text, auto-layout, or images are too lossy to implement from, stop, report the gaps in `BLOCKERS`, and do not claim success.
 
@@ -126,6 +110,7 @@ Write `.mash/designs/<page-slug>/penpot-import/handoff.json` — this is the can
 
 ```json
 {
+  "fileId": "<penpot file id>",
   "pageSlug": "<page-slug>",
   "pageName": "<meta.name board label>",
   "pageId": "<penpot page id>",
@@ -142,6 +127,7 @@ PENPOT_IMPORT_HANDOFF
 SUCCESS: true|false
 PAGE_SLUG: <page-slug>
 PAGE_NAME: <page name>
+FILE_ID: <penpot file id>
 PAGE_ID: <penpot page id>
 ROOT_BOARD_ID: <root board shape id>
 TOKEN_SET: import-<page-slug>
@@ -153,6 +139,4 @@ END_PENPOT_IMPORT_HANDOFF
 
 Offer `penpot-create-design-system` next (map) with this `pageSlug`. Then `penpot-implement-design` with `ROOT_BOARD_ID` from the handoff. Do not ask the user to select the board when `ROOT_BOARD_ID` is known.
 
-Layout tree walk is still MCP and can lose text, auto-layout, or images. Record those in `BLOCKERS`. Do not claim success if the board is too lossy to implement from.
-
-NEVER log data you also `return` from `execute_code`.
+Layout tree walk can lose text, auto-layout, or images. Record those in `BLOCKERS`. Do not claim success if the board is too lossy to implement from.

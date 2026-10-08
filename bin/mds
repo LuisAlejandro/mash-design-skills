@@ -213,6 +213,13 @@ prompt_penpot_local_user() {
       print_info "Skipping local Penpot user (no TTY). Set PENPOT_LOCAL_EMAIL and PENPOT_LOCAL_PASSWORD, or re-run mds setup in a terminal."
       return 0
     fi
+    case "$PENPOT_SETUP_EMAIL" in
+      *@*.*) ;;
+      *)
+        print_error "PENPOT_LOCAL_EMAIL must look like you@example.com. Penpot's login form rejects addresses without a dotted domain."
+        exit 1
+        ;;
+    esac
     PENPOT_SETUP_FULLNAME="${PENPOT_SETUP_EMAIL%%@*}"
     return 0
   fi
@@ -220,7 +227,7 @@ prompt_penpot_local_user() {
   print_step "Local Penpot user..."
   echo "This login is only for your local Penpot at http://localhost:9001."
   echo "It is not a penpot.app account. Registration is disabled on this stack;"
-  echo "setup creates one local profile so you can open files and connect MCP."
+  echo "setup creates one local profile and a Penpot access token for the headless MCP."
   echo ""
   local default_email=""
   default_email="$(env_value PENPOT_LOCAL_EMAIL)"
@@ -234,7 +241,7 @@ prompt_penpot_local_user() {
     fi
     case "$email" in
       *@*.*) break ;;
-      *) print_error "Enter an email like you@example.com (local-only; any domain is fine)" ;;
+        *) print_error "Enter an email like you@example.com. Penpot's login form rejects addresses without a dotted domain." ;;
     esac
   done
   local password="" confirm=""
@@ -316,6 +323,143 @@ create_penpot_local_user() {
   print_error "Failed to create local Penpot user"
   echo "$out" >&2
   return 1
+}
+
+create_penpot_access_token() {
+  if ! env_value_empty PENPOT_ACCESS_TOKEN; then
+    print_info "PENPOT_ACCESS_TOKEN already set"
+    return 0
+  fi
+  local email password
+  email="$(env_value PENPOT_LOCAL_EMAIL)"
+  password="$(env_value PENPOT_LOCAL_PASSWORD)"
+  if [ -z "$email" ] || [ -z "$password" ]; then
+    print_info "Skipping Penpot access token (PENPOT_LOCAL_EMAIL and PENPOT_LOCAL_PASSWORD are required)"
+    return 0
+  fi
+  print_step "Starting Penpot so an access token can be created..."
+  compose up -d penpot-frontend penpot-mailcatch
+  local i
+  for i in $(seq 1 45); do
+    if curl -sf -o /dev/null "http://127.0.0.1:9001/"; then
+      break
+    fi
+    sleep 2
+  done
+  local body headers response cookiejar token_file
+  body="$(mktemp)"
+  headers="$(mktemp)"
+  response="$(mktemp)"
+  cookiejar="$(mktemp)"
+  token_file="$(mktemp)"
+  chmod 600 "$body" "$headers" "$response" "$cookiejar" "$token_file"
+  python3 - "$body" "$email" "$password" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"email": sys.argv[2], "password": sys.argv[3]}), encoding="utf-8")
+PY
+  local code
+  code="000"
+  for i in $(seq 1 20); do
+    code="$(curl -sS -o "$response" -D "$headers" -c "$cookiejar" -w "%{http_code}" \
+      -X POST "http://127.0.0.1:9001/api/rpc/command/login-with-password" \
+      -H "content-type: application/json" -H "accept: application/json" \
+      --data-binary @"$body" || true)"
+    if [ "$code" = "200" ]; then
+      break
+    fi
+    sleep 2
+  done
+  if [ "$code" != "200" ]; then
+    rm -f "$body" "$headers" "$response" "$cookiejar" "$token_file"
+    print_error "Penpot login failed (HTTP ${code}). The access token was not created."
+    return 1
+  fi
+  code="$(curl -sS -o "$response" -b "$cookiejar" -w "%{http_code}" \
+    -X POST "http://127.0.0.1:9001/api/rpc/command/create-access-token" \
+    -H "content-type: application/json" -H "accept: application/json" \
+    --data '{"name":"mash-design","type":"mcp"}' || true)"
+  if [ "$code" != "200" ]; then
+    rm -f "$body" "$headers" "$response" "$cookiejar" "$token_file"
+    print_error "create-access-token failed (HTTP ${code}). Confirm the stack was recreated after enable-access-tokens."
+    return 1
+  fi
+  if ! python3 - "$response" "$token_file" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+token = data.get("token")
+if not isinstance(token, str) or not token:
+    raise SystemExit(1)
+Path(sys.argv[2]).write_text(token, encoding="utf-8")
+PY
+  then
+    rm -f "$body" "$headers" "$response" "$cookiejar" "$token_file"
+    print_error "Penpot did not return an access token"
+    return 1
+  fi
+  set_env_value PENPOT_ACCESS_TOKEN "$(cat "$token_file")"
+  rm -f "$body" "$headers" "$response" "$cookiejar" "$token_file"
+  print_success "Stored PENPOT_ACCESS_TOKEN"
+}
+
+sync_penpot_local_mcp() {
+  local dest="${HOME}/.cursor/mcp.json"
+  local server="${MASH_CONFIG_DIR:-${HOME}/.config/mash}/headless/dist/server.js"
+  local node_bin
+  node_bin="$(command -v node || true)"
+  if [ -z "$node_bin" ] || [ ! -f "$server" ]; then
+    print_info "penpot-local MCP was not updated. Run install.sh so headless/ is built under ~/.config/mash."
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_error "python3 is required to update ~/.cursor/mcp.json"
+    return 1
+  fi
+  mkdir -p "${HOME}/.cursor"
+  python3 - "$dest" "$server" "$node_bin" "${STACK}/${ENV_FILE}" <<'PY'
+import json, sys
+from pathlib import Path
+
+dest, server, node_bin, env_file = map(Path, sys.argv[1:])
+
+def load_env(path: Path) -> dict:
+    values = {}
+    if not path.is_file():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+    return values
+
+env = load_env(env_file)
+data = {}
+if dest.is_file():
+    try:
+        loaded = json.loads(dest.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data = loaded
+    except json.JSONDecodeError:
+        data = {}
+servers = data.get("mcpServers")
+if not isinstance(servers, dict):
+    servers = {}
+    data["mcpServers"] = servers
+servers["penpot-local"] = {
+    "command": str(node_bin),
+    "args": [str(server)],
+    "env": {
+        "PENPOT_BASE_URL": "http://localhost:9001",
+        "PENPOT_ACCESS_TOKEN": env.get("PENPOT_ACCESS_TOKEN", ""),
+        "PENPOT_LOGIN_EMAIL": env.get("PENPOT_LOCAL_EMAIL", ""),
+        "PENPOT_LOGIN_PASSWORD": env.get("PENPOT_LOCAL_PASSWORD", ""),
+    },
+}
+dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+  print_info "Updated penpot-local in ~/.cursor/mcp.json"
 }
 
 prompt_provider_auth() {
@@ -412,8 +556,12 @@ configure_harnesses() {
   print_step "Applying agent credentials to harnesses..."
   local unlocked=0
   if ! env_value_empty CURSOR_API_KEY; then
-    print_info "CURSOR_API_KEY set → cursor-agent (env is enough)"
-    unlocked=1
+    if compose exec -T open-design cursor-agent status --format json 2>/dev/null | grep -q '"isAuthenticated": true'; then
+      print_info "CURSOR_API_KEY accepted by cursor-agent"
+      unlocked=1
+    else
+      print_error "CURSOR_API_KEY is set, but cursor-agent rejected it. Run mds auth and replace the key."
+    fi
   fi
   if ! env_value_empty ANTHROPIC_API_KEY; then
     print_info "ANTHROPIC_API_KEY set → claude, opencode, pi (env is enough)"
@@ -437,8 +585,8 @@ configure_harnesses() {
 od_daemon_py() {
   if [ -f "${STACK}/lib/od_daemon.py" ]; then
     echo "${STACK}/lib/od_daemon.py"
-  elif [ -f "${STACK}/.agents/shared/lib/od_daemon.py" ]; then
-    echo "${STACK}/.agents/shared/lib/od_daemon.py"
+  elif [ -f "${STACK}/scripts/od_daemon.py" ]; then
+    echo "${STACK}/scripts/od_daemon.py"
   fi
 }
 
@@ -507,11 +655,11 @@ Ops:
 
 URLs:
   Penpot UI:    http://localhost:9001
-  MCP:          http://localhost:4401/mcp
+  MCP:          penpot-local (stdio, configured by install.sh)
   OpenDesign:   http://127.0.0.1:7457
   Mailcatcher:  http://localhost:1080
 
-Penpot UI: open http://localhost:9001. Activate the penpot-local MCP in Cursor.
+Penpot UI: open http://localhost:9001. Reload the penpot-local MCP in Cursor after setup.
 EOF
 }
 
@@ -556,6 +704,8 @@ cmd_setup() {
     ensure_env_key ANTHROPIC_API_KEY ""
     ensure_env_key OPENAI_API_KEY ""
     ensure_env_key PENPOT_LOCAL_EMAIL ""
+    ensure_env_key PENPOT_LOCAL_PASSWORD ""
+    ensure_env_key PENPOT_ACCESS_TOKEN ""
   fi
 
   ensure_env_key OPEN_DESIGN_DISABLE_API_AUTH "1"
@@ -589,13 +739,16 @@ cmd_setup() {
   echo ""
 
   prompt_penpot_local_user
+  if [ -n "${PENPOT_SETUP_PASSWORD:-}" ]; then
+    set_env_value PENPOT_LOCAL_PASSWORD "$PENPOT_SETUP_PASSWORD"
+  fi
   echo ""
 
   prompt_provider_auth 0
   echo ""
 
   print_step "Pulling Penpot Docker images..."
-  compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
+  compose pull penpot-frontend penpot-backend penpot-exporter \
     penpot-postgres penpot-valkey penpot-mailcatch
   print_success "Penpot images pulled"
   echo ""
@@ -606,6 +759,10 @@ cmd_setup() {
   echo ""
 
   create_penpot_local_user
+  echo ""
+
+  create_penpot_access_token
+  sync_penpot_local_mcp
   echo ""
 
   maybe_link_bin
@@ -625,7 +782,7 @@ cmd_setup() {
   fi
   echo "  3. OpenDesign UI: http://127.0.0.1:7457"
   echo "  4. mds doctor"
-  echo "  5. Activate the penpot-local MCP in Cursor"
+  echo "  5. Reload the penpot-local MCP in Cursor"
 }
 
 cmd_auth() {
@@ -650,7 +807,7 @@ cmd_start() {
   echo "Starting Penpot and OpenDesign..."
   compose up --remove-orphans --build --detach
   echo "Penpot:     http://localhost:9001"
-  echo "MCP:        http://localhost:4401/mcp"
+  echo "MCP:        penpot-local (stdio)"
   echo "OpenDesign: http://127.0.0.1:7457"
   configure_harnesses
   echo "Check status with 'mds status'"
@@ -686,7 +843,7 @@ cmd_status() {
 cmd_update() {
   require_compose_file
   require_env
-  compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
+  compose pull penpot-frontend penpot-backend penpot-exporter \
     penpot-postgres penpot-valkey penpot-mailcatch
   compose up --remove-orphans --build --detach
   echo "Penpot and OpenDesign updated and restarted"
