@@ -1,0 +1,938 @@
+#!/usr/bin/env bash
+# Mash Design Skills stack CLI (Penpot + MCP + OpenDesign). No Make.
+set -euo pipefail
+
+COMPOSE_FILE="docker-compose.yaml"
+ENV_FILE="penpot.env"
+DEFAULT_STACK="${HOME}/.local/share/mash/design"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_error() { echo -e "${RED}Error: $1${NC}" >&2; }
+print_success() { echo -e "${GREEN}$1${NC}"; }
+print_info() { echo -e "${YELLOW}$1${NC}"; }
+print_step() { echo -e "${BLUE}$1${NC}"; }
+
+script_dir() {
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+}
+
+resolve_stack() {
+  local candidate
+  if [ -n "${MASH_DESIGN_STACK:-}" ]; then
+    candidate="$(cd "${MASH_DESIGN_STACK}" && pwd -P)"
+    echo "$candidate"
+    return 0
+  fi
+  candidate="$(cd "$(script_dir)/.." && pwd -P)"
+  if [ -f "${candidate}/${COMPOSE_FILE}" ]; then
+    echo "$candidate"
+    return 0
+  fi
+  echo "$DEFAULT_STACK"
+}
+
+is_toolkit_root() {
+  local d="$1"
+  [ -n "$d" ] && [ -f "$d/install.sh" ] && [ -f "$d/bin/mds" ] && [ -f "$d/docker-compose.yaml" ] \
+    && [ -d "$d/src/skills/mash-design-setup" ]
+}
+
+derive_project_name() {
+  # Compose project identity for a given resolved stack root.
+  # $1: resolved root path. $2: "1" when MASH_DESIGN_STACK was explicitly set
+  # for this root, "0" for an implicit/default resolution.
+  #
+  # Two legacy modes keep the literal "penpot" project name so existing
+  # volumes keep working (README.md:72): the installed default share root,
+  # and an implicit (non-explicit) invocation from a toolkit clone. Any
+  # explicit MASH_DESIGN_STACK — including one pointing at a clone — derives a
+  # stable per-root identity instead, so distinct custom stack roots never
+  # collide under one Compose project (R5). Moving an explicit
+  # MASH_DESIGN_STACK to a different real path changes its derived identity
+  # and orphans the prior project's resources under the old name.
+  local root="$1"
+  local explicit="$2"
+  if [ "$root" = "${HOME}/.local/share/mash/design" ]; then
+    echo "penpot"
+    return 0
+  fi
+  if [ "$explicit" != "1" ] && is_toolkit_root "$root"; then
+    echo "penpot"
+    return 0
+  fi
+  echo "mds-$(printf '%s' "$root" | shasum -a 256 | cut -c1-32)"
+}
+
+if [ -n "${MASH_DESIGN_STACK:-}" ]; then
+  MASH_DESIGN_STACK_WAS_EXPLICIT=1
+else
+  MASH_DESIGN_STACK_WAS_EXPLICIT=0
+fi
+STACK="$(resolve_stack)"
+export MASH_DESIGN_STACK="$STACK"
+PROJECT_NAME="$(derive_project_name "$STACK" "$MASH_DESIGN_STACK_WAS_EXPLICIT")"
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    print_error "Docker is not installed. Install Docker Desktop first."
+    exit 1
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    print_error "Docker Compose v2 is not available."
+    exit 1
+  fi
+}
+
+compose() {
+  require_docker
+  cd "$STACK"
+  if [ -f "${STACK}/${ENV_FILE}" ]; then
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+  else
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
+  fi
+}
+
+require_env() {
+  if [ ! -f "${STACK}/${ENV_FILE}" ]; then
+    print_error "Missing ${STACK}/${ENV_FILE}. Run: mds setup"
+    exit 1
+  fi
+}
+
+require_strong_secret() {
+  # Compose's `${PENPOT_SECRET_KEY:?err}` guard only catches unset/empty.
+  # This catches the one case it cannot: a penpot.env already containing
+  # the known literal fallback value.
+  local key
+  key="$(env_value PENPOT_SECRET_KEY)"
+  if [ -z "$key" ] || [ "$key" = "change-this-insecure-key" ]; then
+    print_error "PENPOT_SECRET_KEY is missing or uses the insecure fallback value. Run: mds setup"
+    exit 1
+  fi
+}
+
+require_compose_file() {
+  if [ ! -f "${STACK}/${COMPOSE_FILE}" ]; then
+    print_error "Missing ${STACK}/${COMPOSE_FILE}."
+    print_info "Run install.sh from an app, or invoke ./bin/mds from the Mash Design Skills clone."
+    exit 1
+  fi
+}
+
+ensure_env_key() {
+  local key="$1"
+  local default="${2-}"
+  if ! grep -q "^${key}=" "${STACK}/${ENV_FILE}"; then
+    echo "${key}=${default}" >> "${STACK}/${ENV_FILE}"
+    print_info "Appended ${key} to ${ENV_FILE}"
+  fi
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local file="${STACK}/${ENV_FILE}"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_error "python3 is required to write ${ENV_FILE}"
+    exit 1
+  fi
+  python3 - "$file" "$key" "$value" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+text = path.read_text(encoding="utf-8") if path.is_file() else ""
+lines = text.splitlines()
+prefix = f"{key}="
+replaced = False
+out = []
+for line in lines:
+    if line.startswith(prefix):
+        if not replaced:
+            out.append(f"{key}={value}")
+            replaced = True
+        continue
+    out.append(line)
+if not replaced:
+    if out and out[-1] != "":
+        out.append("")
+    out.append(f"{key}={value}")
+path.write_text("\n".join(out) + "\n", encoding="utf-8")
+PY
+  chmod 600 "$file"
+}
+
+env_value_empty() {
+  local key="$1"
+  local raw
+  raw="$(grep "^${key}=" "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
+  [ -z "$raw" ]
+}
+
+any_provider_key_set() {
+  ! env_value_empty CURSOR_API_KEY && return 0
+  ! env_value_empty ANTHROPIC_API_KEY && return 0
+  ! env_value_empty OPENAI_API_KEY && return 0
+  return 1
+}
+
+env_value() {
+  local key="$1"
+  grep "^${key}=" "${STACK}/${ENV_FILE}" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
+}
+
+penpot_profile_exists() {
+  local email="$1"
+  local escaped="${email//\'/\'\'}"
+  local found
+  found="$(compose exec -T penpot-postgres psql -U penpot -d penpot -tAc \
+    "SELECT 1 FROM profile WHERE lower(email) = lower('${escaped}')" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ "$found" = "1" ]
+}
+
+prompt_penpot_local_user() {
+  PENPOT_SETUP_EMAIL=""
+  PENPOT_SETUP_PASSWORD=""
+  PENPOT_SETUP_FULLNAME=""
+  if [ "${SKIP_USER:-0}" = "1" ]; then
+    print_info "Skipping local Penpot user (--skip-user)"
+    return 0
+  fi
+  if [ "${MASH_DESIGN_NONINTERACTIVE:-}" = "1" ] || [ ! -t 0 ]; then
+    PENPOT_SETUP_EMAIL="${PENPOT_LOCAL_EMAIL:-}"
+    PENPOT_SETUP_PASSWORD="${PENPOT_LOCAL_PASSWORD:-}"
+    if [ -z "$PENPOT_SETUP_EMAIL" ] || [ -z "$PENPOT_SETUP_PASSWORD" ]; then
+      print_info "Skipping local Penpot user (no TTY). Set PENPOT_LOCAL_EMAIL and PENPOT_LOCAL_PASSWORD, or re-run mds setup in a terminal."
+      return 0
+    fi
+    PENPOT_SETUP_FULLNAME="${PENPOT_SETUP_EMAIL%%@*}"
+    return 0
+  fi
+
+  print_step "Local Penpot user..."
+  echo "This login is only for your local Penpot at http://localhost:9001."
+  echo "It is not a penpot.app account. Registration is disabled on this stack;"
+  echo "setup creates one local profile so you can open files and connect MCP."
+  echo ""
+  local default_email=""
+  default_email="$(env_value PENPOT_LOCAL_EMAIL)"
+  local email=""
+  while true; do
+    if [ -n "$default_email" ]; then
+      read -r -p "Email [${default_email}]: " email
+      email="${email:-$default_email}"
+    else
+      read -r -p "Email: " email
+    fi
+    case "$email" in
+      *@*.*) break ;;
+      *) print_error "Enter an email like you@example.com (local-only; any domain is fine)" ;;
+    esac
+  done
+  local password="" confirm=""
+  while true; do
+    read -r -s -p "Password: " password
+    echo ""
+    if [ -z "$password" ]; then
+      print_error "Password cannot be empty"
+      continue
+    fi
+    read -r -s -p "Confirm password: " confirm
+    echo ""
+    if [ "$password" != "$confirm" ]; then
+      print_error "Passwords do not match"
+      continue
+    fi
+    break
+  done
+  PENPOT_SETUP_EMAIL="$email"
+  PENPOT_SETUP_PASSWORD="$password"
+  PENPOT_SETUP_FULLNAME="${email%%@*}"
+}
+
+ensure_penpot_backend() {
+  print_step "Starting Penpot backend (needed to create the local user)..."
+  compose up -d penpot-postgres penpot-valkey penpot-backend
+  local i
+  for i in $(seq 1 45); do
+    if compose exec -T penpot-postgres psql -U penpot -d penpot -c 'SELECT 1' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  print_error "penpot-postgres did not become ready"
+  return 1
+}
+
+create_penpot_local_user() {
+  if [ -z "${PENPOT_SETUP_EMAIL:-}" ]; then
+    return 0
+  fi
+  ensure_penpot_backend
+  if penpot_profile_exists "$PENPOT_SETUP_EMAIL"; then
+    print_info "Local Penpot user ${PENPOT_SETUP_EMAIL} already exists"
+    set_env_value PENPOT_LOCAL_EMAIL "$PENPOT_SETUP_EMAIL"
+    PENPOT_SETUP_PASSWORD=""
+    return 0
+  fi
+  if [ -z "${PENPOT_SETUP_PASSWORD:-}" ]; then
+    print_error "Cannot create ${PENPOT_SETUP_EMAIL}: password missing"
+    return 1
+  fi
+  print_step "Creating local Penpot user ${PENPOT_SETUP_EMAIL}..."
+  local i out rc
+  out=""
+  for i in $(seq 1 30); do
+    set +e
+    out="$(compose exec -T penpot-backend python3 manage.py create-profile \
+      -n "$PENPOT_SETUP_FULLNAME" \
+      -e "$PENPOT_SETUP_EMAIL" \
+      -p "$PENPOT_SETUP_PASSWORD" \
+      --skip-tutorial --skip-walkthrough 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      print_success "Created local Penpot user ${PENPOT_SETUP_EMAIL}"
+      set_env_value PENPOT_LOCAL_EMAIL "$PENPOT_SETUP_EMAIL"
+      PENPOT_SETUP_PASSWORD=""
+      return 0
+    fi
+    if echo "$out" | grep -qiE 'already exists|duplicate'; then
+      print_info "Local Penpot user ${PENPOT_SETUP_EMAIL} already exists"
+      set_env_value PENPOT_LOCAL_EMAIL "$PENPOT_SETUP_EMAIL"
+      PENPOT_SETUP_PASSWORD=""
+      return 0
+    fi
+    sleep 2
+  done
+  print_error "Failed to create local Penpot user"
+  echo "$out" >&2
+  return 1
+}
+
+prompt_provider_auth() {
+  local force="${1:-0}"
+  if [ "${SKIP_AUTH:-0}" = "1" ] || [ "${MASH_DESIGN_NONINTERACTIVE:-}" = "1" ]; then
+    print_info "Skipping provider auth prompt (MASH_DESIGN_NONINTERACTIVE or --skip-auth)"
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    print_info "Skipping provider auth prompt (no TTY). Run mds auth later or set keys in ${STACK}/${ENV_FILE}."
+    return 0
+  fi
+  if [ "$force" != "1" ] && any_provider_key_set; then
+    print_info "Provider API key already set in ${ENV_FILE}"
+    return 0
+  fi
+
+  print_step "OpenDesign agent credentials..."
+  echo "Choose a provider to unlock at least one harness. Skip means no agent jobs until mds auth."
+  local more="yes"
+  while [ "$more" = "yes" ]; do
+    echo ""
+    echo "  1) Cursor        → CURSOR_API_KEY → cursor-agent"
+    echo "  2) Anthropic     → ANTHROPIC_API_KEY → claude, opencode, pi"
+    echo "  3) OpenAI        → OPENAI_API_KEY → codex (then opencode, pi)"
+    echo "  4) Skip"
+    local choice=""
+    read -r -p "Provider [1-4]: " choice
+    case "$choice" in
+      1) _prompt_and_save_key CURSOR_API_KEY "Cursor API key" ;;
+      2) _prompt_and_save_key ANTHROPIC_API_KEY "Anthropic API key" ;;
+      3) _prompt_and_save_key OPENAI_API_KEY "OpenAI API key" ;;
+      4|"")
+        if ! any_provider_key_set; then
+          print_info "No provider key saved. OpenDesign agent jobs need mds auth first."
+        fi
+        more="no"
+        continue
+        ;;
+      *)
+        print_error "Invalid choice"
+        continue
+        ;;
+    esac
+    local again=""
+    read -r -p "Add another provider? [y/N]: " again
+    case "$again" in
+      y|Y|yes|YES) more="yes" ;;
+      *) more="no" ;;
+    esac
+  done
+}
+
+_prompt_and_save_key() {
+  local key="$1"
+  local label="$2"
+  local value=""
+  while [ -z "$value" ]; do
+    read -r -s -p "${label}: " value
+    echo ""
+    if [ -z "$value" ]; then
+      print_error "Key cannot be empty"
+    fi
+  done
+  set_env_value "$key" "$value"
+  print_success "Saved ${key} to ${ENV_FILE}"
+}
+
+open_design_port() {
+  local port
+  port="$(grep '^OPEN_DESIGN_PORT=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
+  echo "${port:-7457}"
+}
+
+wait_open_design() {
+  local port
+  port="$(open_design_port)"
+  local i
+  for i in $(seq 1 45); do
+    if curl -sf "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  print_info "OpenDesign health not ready; skipping harness apply"
+  return 1
+}
+
+configure_harnesses() {
+  require_env
+  if ! wait_open_design; then
+    return 0
+  fi
+  print_step "Applying agent credentials to harnesses..."
+  local unlocked=0
+  if ! env_value_empty CURSOR_API_KEY; then
+    print_info "CURSOR_API_KEY set → cursor-agent (env is enough)"
+    unlocked=1
+  fi
+  if ! env_value_empty ANTHROPIC_API_KEY; then
+    print_info "ANTHROPIC_API_KEY set → claude, opencode, pi (env is enough)"
+    unlocked=1
+  fi
+  if ! env_value_empty OPENAI_API_KEY; then
+    print_info "OPENAI_API_KEY set → codex (then opencode, pi)"
+    unlocked=1
+    if compose exec -T open-design sh -c 'printenv OPENAI_API_KEY | codex login --with-api-key' >/dev/null 2>&1; then
+      print_success "codex login --with-api-key"
+    else
+      print_info "codex login --with-api-key failed (continuing)"
+    fi
+  fi
+  if [ "$unlocked" = "0" ]; then
+    print_info "No provider keys in ${ENV_FILE}. Run mds auth before OpenDesign agent jobs."
+  fi
+  seed_opendesign_studio
+}
+
+od_daemon_py() {
+  if [ -f "${STACK}/lib/od_daemon.py" ]; then
+    echo "${STACK}/lib/od_daemon.py"
+  elif [ -f "${STACK}/.agents/shared/lib/od_daemon.py" ]; then
+    echo "${STACK}/.agents/shared/lib/od_daemon.py"
+  fi
+}
+
+seed_opendesign_studio() {
+  local helper=""
+  helper="$(od_daemon_py)"
+  if [ -z "$helper" ]; then
+    print_info "Skipping OpenDesign studio seed (od_daemon.py not in the stack)"
+    return 0
+  fi
+  local out rc
+  set +e
+  out="$(python3 "$helper" seed-studio --stack-root "$STACK" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    print_success "OpenDesign studio: skipped onboarding, agent ${out}"
+  else
+    print_info "OpenDesign studio: ${out}"
+  fi
+}
+
+maybe_link_bin() {
+  local dest="${HOME}/.local/bin"
+  if [ -d "$dest" ] && [ -x "${STACK}/bin/mds" ]; then
+    ln -sfn "${STACK}/bin/mds" "${dest}/mds"
+    print_info "Linked ${dest}/mds → ${STACK}/bin/mds"
+  fi
+}
+
+cmd_help() {
+  cat <<EOF
+Mash Design Skills — local Penpot + OpenDesign stack
+====================================================
+
+Usage: mds <command>
+
+Stack root: ${STACK}
+  Override with MASH_DESIGN_STACK.
+
+Lifecycle:
+  setup     Create penpot.env, generate secrets, local Penpot user, optional provider keys, pull Penpot, build OpenDesign
+            Flags: --skip-auth --skip-user
+            Env: MASH_DESIGN_NONINTERACTIVE=1 skips prompts; PENPOT_LOCAL_EMAIL + PENPOT_LOCAL_PASSWORD create the user without a TTY
+  start     Start containers (builds OpenDesign if needed), then apply harness logins and seed the OpenDesign studio
+  auth      Prompt for provider API keys, recreate open-design, apply harness logins
+  stop      Stop containers
+  down      Stop and remove containers (keep volumes)
+  restart   Stop then start
+  destroy   Remove this project's containers, images, and volumes (asks first).
+            Does not uninstall the CLI, stack dir, or user skill pack.
+  uninstall Dry run of uninstall.sh. Pass --apply to remove the design
+            payload recorded in ~/.config/mash/design-install-manifest.json
+            (skills, agents, penpot-local, the stack pin, and
+            ~/.local/share/mash/design). Keeps .mash/ in app repos.
+            Env: MASH_DESIGN_CONFIRM_UNINSTALL=1 confirms Compose teardown
+            when there is no terminal.
+
+Ops:
+  logs      Follow logs
+  status    Show container status
+  update    Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins
+  backup    Dump Postgres into backups/
+  doctor    OpenDesign health, agent CLIs, runnable harness table
+  convert   Figma → Penpot via figpot (needs .env in the stack root)
+
+URLs:
+  Penpot UI:    http://localhost:9001
+  MCP:          http://localhost:4401/mcp
+  OpenDesign:   http://127.0.0.1:7457
+  Mailcatcher:  http://localhost:1080
+
+Penpot UI: open http://localhost:9001. Activate the penpot-local MCP in Cursor.
+EOF
+}
+
+cmd_setup() {
+  require_docker
+  require_compose_file
+  SKIP_AUTH=0
+  SKIP_USER=0
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --skip-auth) SKIP_AUTH=1 ;;
+      --skip-user) SKIP_USER=1 ;;
+    esac
+  done
+  print_step "=== Penpot + OpenDesign local setup ==="
+  echo "Stack: ${STACK}"
+  echo ""
+
+  cd "$STACK"
+
+  print_step "Environment..."
+  if [ ! -f "${ENV_FILE}" ]; then
+    if [ -f penpot.env.example ]; then
+      cp penpot.env.example "${ENV_FILE}"
+      chmod 600 "${ENV_FILE}"
+      print_success "Created ${ENV_FILE} from penpot.env.example"
+    else
+      print_error "penpot.env.example not found in ${STACK}"
+      exit 1
+    fi
+  else
+    chmod 600 "${ENV_FILE}"
+    print_info "${ENV_FILE} already exists (kept; missing OpenDesign keys appended)"
+    ensure_env_key OPEN_DESIGN_IMAGE "ghcr.io/nexu-io/od:0.17.0"
+    ensure_env_key OPEN_DESIGN_MEM_LIMIT "4g"
+    ensure_env_key OPEN_DESIGN_PORT "7457"
+    ensure_env_key OD_CODEX_SANDBOX "danger-full-access"
+    ensure_env_key OPEN_DESIGN_DISABLE_API_AUTH "1"
+    ensure_env_key OD_API_TOKEN ""
+    ensure_env_key CURSOR_API_KEY ""
+    ensure_env_key ANTHROPIC_API_KEY ""
+    ensure_env_key OPENAI_API_KEY ""
+    ensure_env_key PENPOT_LOCAL_EMAIL ""
+  fi
+
+  ensure_env_key OPEN_DESIGN_DISABLE_API_AUTH "1"
+
+  if [ ! -f .env ] && [ -f .env.example ]; then
+    cp .env.example .env
+    chmod 600 .env
+    print_info "Created .env from .env.example (fill tokens before mds convert)"
+  elif [ -f .env ]; then
+    chmod 600 .env
+  fi
+  echo ""
+
+  print_step "Secrets..."
+  if ! grep -q "^PENPOT_SECRET_KEY=" "${ENV_FILE}" \
+    || grep -q "^PENPOT_SECRET_KEY=$" "${ENV_FILE}" \
+    || grep -q "^PENPOT_SECRET_KEY=your_secret_key" "${ENV_FILE}" \
+    || grep -q "^PENPOT_SECRET_KEY=change-this-insecure-key" "${ENV_FILE}"; then
+    set_env_value PENPOT_SECRET_KEY "$(openssl rand -base64 64 | tr -d '\n')"
+    print_success "Generated PENPOT_SECRET_KEY"
+  else
+    print_info "PENPOT_SECRET_KEY already set"
+  fi
+
+  if ! grep -q "^OD_API_TOKEN=" "${ENV_FILE}" || env_value_empty OD_API_TOKEN; then
+    set_env_value OD_API_TOKEN "$(openssl rand -hex 32)"
+    print_success "Generated OD_API_TOKEN"
+  else
+    print_info "OD_API_TOKEN already set"
+  fi
+  echo ""
+
+  prompt_penpot_local_user
+  echo ""
+
+  prompt_provider_auth 0
+  echo ""
+
+  print_step "Pulling Penpot Docker images..."
+  compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
+    penpot-postgres penpot-valkey penpot-mailcatch
+  print_success "Penpot images pulled"
+  echo ""
+
+  print_step "Building OpenDesign image (Linux agent CLIs)..."
+  compose build open-design
+  print_success "OpenDesign image built"
+  echo ""
+
+  create_penpot_local_user
+  echo ""
+
+  maybe_link_bin
+
+  print_success "=== Setup complete ==="
+  echo ""
+  print_info "Next:"
+  if any_provider_key_set; then
+    echo "  1. mds start  (applies keys to harnesses)"
+  else
+    echo "  1. mds auth   (or mds start after you add keys — no runnable harness yet)"
+  fi
+  if [ -n "${PENPOT_SETUP_EMAIL:-}" ]; then
+    echo "  2. Open http://localhost:9001 and log in as ${PENPOT_SETUP_EMAIL}"
+  else
+    echo "  2. Open http://localhost:9001"
+  fi
+  echo "  3. OpenDesign UI: http://127.0.0.1:7457"
+  echo "  4. mds doctor"
+  echo "  5. Activate the penpot-local MCP in Cursor"
+}
+
+cmd_auth() {
+  require_docker
+  require_compose_file
+  require_env
+  chmod 600 "${STACK}/${ENV_FILE}"
+  SKIP_AUTH=0
+  prompt_provider_auth 1
+  echo "Recreating open-design so Compose picks up ${ENV_FILE}..."
+  compose up -d --force-recreate open-design
+  configure_harnesses
+}
+
+cmd_start() {
+  require_compose_file
+  require_env
+  require_strong_secret
+  if [ -z "$(docker images -q penpotapp/frontend 2>/dev/null || true)" ]; then
+    cmd_setup "$@"
+  fi
+  echo "Starting Penpot and OpenDesign..."
+  compose up --remove-orphans --build --detach
+  echo "Penpot:     http://localhost:9001"
+  echo "MCP:        http://localhost:4401/mcp"
+  echo "OpenDesign: http://127.0.0.1:7457"
+  configure_harnesses
+  echo "Check status with 'mds status'"
+}
+
+cmd_stop() {
+  require_compose_file
+  echo "Stopping containers..."
+  compose stop
+}
+
+cmd_down() {
+  require_compose_file
+  echo "Stopping and removing containers..."
+  compose down --remove-orphans
+}
+
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
+cmd_logs() {
+  require_compose_file
+  compose logs -f
+}
+
+cmd_status() {
+  require_compose_file
+  compose ps
+}
+
+cmd_update() {
+  require_compose_file
+  require_env
+  compose pull penpot-frontend penpot-backend penpot-mcp penpot-exporter \
+    penpot-postgres penpot-valkey penpot-mailcatch
+  compose up --remove-orphans --build --detach
+  echo "Penpot and OpenDesign updated and restarted"
+  configure_harnesses
+}
+
+cmd_backup() {
+  require_compose_file
+  require_env
+  mkdir -p "${STACK}/backups"
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  compose exec -T penpot-postgres pg_dump -U penpot penpot > "${STACK}/backups/penpot-${stamp}.sql"
+  echo "Database backup created in ${STACK}/backups/"
+  echo "Coverage: PostgreSQL data only. This does not cover Penpot assets, OpenDesign data, or OpenDesign home state; no restore path exists yet for those volumes."
+}
+
+cmd_doctor() {
+  require_compose_file
+  require_env
+  local port token
+  port="$(open_design_port)"
+  echo "OpenDesign health..."
+  curl -sf "http://127.0.0.1:${port}/api/health"
+  echo ""
+  echo "CLI binaries inside the container..."
+  compose exec -T open-design sh -c 'command -v cursor-agent && command -v claude && command -v codex && command -v opencode && command -v pi'
+  echo ""
+  echo "Runnable harnesses (PATH + credentials; not daemon authStatus)..."
+  token="$(grep '^OD_API_TOKEN=' "${STACK}/${ENV_FILE}" | tail -n 1 | cut -d= -f2-)"
+  python3 - "$STACK/${ENV_FILE}" "$token" "$port" <<'PY'
+import json, pathlib, sys, urllib.request
+
+env_path = pathlib.Path(sys.argv[1])
+token = sys.argv[2]
+port = sys.argv[3]
+file_env = {}
+for line in env_path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    k, _, v = line.partition("=")
+    file_env[k.strip()] = v.strip().strip("'").strip('"')
+
+creds = {
+    "CURSOR_API_KEY": bool(file_env.get("CURSOR_API_KEY", "").strip()),
+    "ANTHROPIC_API_KEY": bool(file_env.get("ANTHROPIC_API_KEY", "").strip()),
+    "OPENAI_API_KEY": bool(file_env.get("OPENAI_API_KEY", "").strip()),
+}
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/api/agents",
+    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+)
+with urllib.request.urlopen(req, timeout=15) as resp:
+    payload = json.loads(resp.read().decode("utf-8"))
+agents = payload.get("agents") or []
+path_ids = []
+for item in agents:
+    if not isinstance(item, dict):
+        continue
+    ident = str(item.get("id") or "").strip()
+    if ident and item.get("available") is not False:
+        path_ids.append(ident)
+
+def runnable(ident: str) -> tuple[bool, str]:
+    on_path = ident in path_ids
+    if not on_path:
+        return False, "not on PATH"
+    if ident == "cursor-agent":
+        return (True, "CURSOR_API_KEY") if creds["CURSOR_API_KEY"] else (False, "needs CURSOR_API_KEY")
+    if ident == "claude":
+        return (True, "ANTHROPIC_API_KEY") if creds["ANTHROPIC_API_KEY"] else (False, "needs ANTHROPIC_API_KEY")
+    if ident == "codex":
+        return (True, "OPENAI_API_KEY") if creds["OPENAI_API_KEY"] else (False, "needs OPENAI_API_KEY")
+    if ident in ("opencode", "byok-opencode"):
+        if creds["ANTHROPIC_API_KEY"] or creds["OPENAI_API_KEY"]:
+            return True, "ANTHROPIC or OPENAI key"
+        return False, "needs ANTHROPIC_API_KEY or OPENAI_API_KEY"
+    if ident == "pi":
+        if creds["ANTHROPIC_API_KEY"] or creds["OPENAI_API_KEY"]:
+            return True, "ANTHROPIC or OPENAI key"
+        return False, "needs ANTHROPIC_API_KEY or OPENAI_API_KEY"
+    return False, "not a configured harness"
+
+print(f"{'id':16} {'path':5} {'runnable':8} reason")
+for ident in ("cursor-agent", "claude", "codex", "opencode", "byok-opencode", "pi"):
+    ok, reason = runnable(ident)
+    on = "yes" if ident in path_ids else "no"
+    print(f"{ident:16} {on:5} {'yes' if ok else 'no':8} {reason}")
+PY
+}
+
+project_volume_names() {
+  # $1: project name. Prints the fixed named-volume list for that project,
+  # one per line, matching docker-compose.yaml's top-level `volumes:` block.
+  local project="$1"
+  printf '%s\n' \
+    "${project}_penpot_postgres_v15" \
+    "${project}_penpot_assets" \
+    "${project}_open_design_data" \
+    "${project}_open_design_home"
+}
+
+require_destructive_confirmation() {
+  # $1: command label (e.g. "destroy"). $2: resolved project name to bind
+  # the confirmation phrase to. $3: bypass env var name for this command
+  # only — never cross-accepted by a sibling destructive command. Remaining
+  # args: one or more stack roots this identity covers (printed in the
+  # warning so every project being removed is explicitly named).
+  local label="$1"
+  local project="$2"
+  local bypass_var="$3"
+  shift 3
+  local roots=("$@")
+  local bypass_value="${!bypass_var:-}"
+  echo ""
+  echo "WARNING!!!"
+  echo "This will ${label} the following stack:"
+  if [ "${#roots[@]}" -gt 1 ]; then
+    echo "  Roots:"
+    local r
+    for r in "${roots[@]}"; do
+      echo "    - $r"
+    done
+  else
+    echo "  Root:    ${roots[0]}"
+  fi
+  echo "  Project: ${project}"
+  echo "Named volumes at risk:"
+  project_volume_names "$project" | sed 's/^/  - /'
+  echo ""
+  echo "No complete backup/restore path exists yet for these volumes; \`mds backup\` covers PostgreSQL data only."
+  echo ""
+  if [ -t 0 ]; then
+    read -r -p "Type the project name (${project}) to confirm ${label}, or anything else to abort: " reply || reply=""
+    if [ "$reply" != "$project" ]; then
+      print_error "Confirmation did not match; aborting ${label}."
+      exit 1
+    fi
+    return 0
+  fi
+  if [ "$bypass_value" = "1" ]; then
+    return 0
+  fi
+  print_error "Refusing ${label} without a TTY. Set ${bypass_var}=1 to proceed."
+  exit 1
+}
+
+cmd_destroy() {
+  require_compose_file
+  require_destructive_confirmation "destroy" "$PROJECT_NAME" "MASH_DESIGN_CONFIRM_DESTROY" "$STACK"
+  compose down --rmi all --remove-orphans --volumes
+  echo "Project destroyed."
+}
+
+rm_if_exists() {
+  local path="$1"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    rm -rf "$path"
+    print_info "Removed $path"
+  fi
+}
+
+destroy_compose_at() {
+  # $1: target stack root. $2: "1" when that root came from an explicit
+  # MASH_DESIGN_STACK, "0" otherwise. Derives this root's own project identity
+  # (not the caller's $PROJECT_NAME) since this can be invoked against
+  # $share_stack, which may differ from $STACK.
+  local root="$1"
+  local explicit="${2:-0}"
+  if [ ! -f "$root/docker-compose.yaml" ]; then
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    print_error "Docker not found; cannot destroy compose project in $root"
+    return 1
+  fi
+  local root_project
+  root_project="$(derive_project_name "$root" "$explicit")"
+  print_step "Destroying Compose project '$root_project' in $root (containers, images, volumes)..."
+  local rc
+  set +e
+  if [ -f "$root/penpot.env" ]; then
+    docker compose -p "$root_project" -f "$root/docker-compose.yaml" \
+      --env-file "$root/penpot.env" --project-directory "$root" \
+      down --rmi all --remove-orphans --volumes
+  else
+    docker compose -p "$root_project" -f "$root/docker-compose.yaml" \
+      --project-directory "$root" down --rmi all --remove-orphans --volumes
+  fi
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    print_error "compose down failed for project '$root_project' in $root"
+  fi
+  return "$rc"
+}
+
+cmd_uninstall() {
+  local script=""
+  if [ -f "$(cd "$(script_dir)/.." && pwd)/uninstall.sh" ]; then
+    script="$(cd "$(script_dir)/.." && pwd)/uninstall.sh"
+  elif [ -f "${MASH_CONFIG_DIR:-$HOME/.config/mash}/uninstall-design.sh" ]; then
+    script="${MASH_CONFIG_DIR:-$HOME/.config/mash}/uninstall-design.sh"
+  fi
+  if [ -z "$script" ]; then
+    print_error "uninstall.sh not found. Re-run install.sh from the Mash Design Skills clone."
+    exit 1
+  fi
+  exec bash "$script" "$@"
+}
+
+cmd_convert() {
+  require_compose_file
+  if [ ! -f "${STACK}/convert.sh" ]; then
+    print_error "convert.sh is not in ${STACK}. Copy it from the Mash Design Skills clone or run from the clone."
+    exit 1
+  fi
+  (cd "$STACK" && bash ./convert.sh)
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    help|-h|--help) cmd_help ;;
+    setup) cmd_setup "$@" ;;
+    auth) cmd_auth "$@" ;;
+    start|serve) cmd_start "$@" ;;
+    stop) cmd_stop "$@" ;;
+    down|clean) cmd_down "$@" ;;
+    restart) cmd_restart "$@" ;;
+    logs) cmd_logs "$@" ;;
+    status) cmd_status "$@" ;;
+    update) cmd_update "$@" ;;
+    backup) cmd_backup "$@" ;;
+    doctor|od-smoke) cmd_doctor "$@" ;;
+    destroy) cmd_destroy "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    convert) cmd_convert "$@" ;;
+    *)
+      print_error "Unknown command: $cmd"
+      cmd_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

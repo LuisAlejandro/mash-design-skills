@@ -1,4 +1,4 @@
-MMD Skills
+Mash Design Skills
 Copyright (c) 2026 Luis Alejandro
 
 This repository's original scripts, Cursor skills, agents, Dockerfile wrapper,
@@ -19,7 +19,7 @@ OpenDesign
   https://github.com/nexu-io/open-design
 
 figpot
-  Optional Figma-to-Penpot conversion via `mmd convert` / convert.sh
+  Optional Figma-to-Penpot conversion via `mds convert` / convert.sh
   (`npx @betagouv/figpot`).
   https://github.com/betagouv/figpot
 
@@ -28,4 +28,4 @@ Vendor agent CLIs (local image only)
   published Linux binaries: cursor-agent, claude, codex, opencode, and pi.
   Those CLIs remain the property of their vendors. Do not publish or
   redistribute penpot-opendesign:local. Each clone builds the image with
-  `mmd setup`.
+  `mds setup`.

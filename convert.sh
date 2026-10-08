@@ -2,7 +2,7 @@
 
 # Migrate a Figma file into the local Penpot instance using figpot.
 # https://github.com/betagouv/figpot
-# Usage: ./convert.sh   or   mmd convert
+# Usage: ./convert.sh   or   mds convert
 # Reads IDs from .env (FIGMA_DESIGN_URL and PENPOT_DESIGN_URL).
 
 set -e

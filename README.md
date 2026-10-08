@@ -1,6 +1,13 @@
-# MMD Skills
+# Mash Design Skills
 
-Local design-to-code toolkit for Cursor. [OpenDesign](https://github.com/nexu-io/open-design) explores HTML. [Penpot](https://penpot.app) is the canonical file. Penpot implement ships code. This repo is not an application; you install the skills **once on this machine** and run Penpot + OpenDesign as a machine-local Docker stack. Design artifacts stay in **your app** (`rosey/`). This project's files are MIT ([LICENSE](LICENSE)); third-party stack pieces are listed in [NOTICE](NOTICE).
+Mash Design Skills is the design-to-code pack that sits beside
+[Mash Programming Skills](https://github.com/LuisAlejandro/mash-programming-skills).
+[OpenDesign](https://github.com/nexu-io/open-design) explores HTML.
+[Penpot](https://penpot.app) is the canonical file. Penpot implement ships code.
+You install the skills once on this machine and run Penpot + OpenDesign as a
+machine-local Docker stack. Design artifacts stay in the app under `.mash/`.
+This project's files are MIT ([LICENSE](LICENSE)); third-party stack pieces are
+listed in [NOTICE](NOTICE).
 
 ```text
 od-design-system? → od-design-candidates → [pick winner]
@@ -9,99 +16,165 @@ od-design-system? → od-design-candidates → [pick winner]
   → (later) penpot-sync-code-to-design
 ```
 
-After pick, identity is `rosey/designs/<page-slug>/penpot-import/handoff.json` (`pageSlug`, `pageId`, `rootBoardId`). Later stages read that file. Do not re-slugify the Penpot page title.
+After pick, identity is `.mash/designs/<page-slug>/penpot-import/handoff.json`
+(`pageSlug`, `pageId`, `rootBoardId`). Later stages read that file. Do not
+re-slugify the Penpot page title.
 
-Skip `od-design-system` when `rosey/design-system/DESIGN.md` or `rosey/designs/design-system.json` already exists. Skip candidates and import when a Penpot frame already exists.
+Skip `od-design-system` when `.mash/design-system/DESIGN.md` or
+`.mash/designs/design-system.json` already exists. Skip candidates and import
+when a Penpot frame already exists. Root `DESIGN.md` stays at the app root.
 
-## Requirements
+## Installation
 
-- Docker and Docker Compose v2
-- Node.js / Python 3 for skill scripts (the installer runs `npm install` and a candidates venv)
-
-## Install (once per machine)
+No checkout is required. This downloads the `develop` tarball and installs from it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/LuisAlejandro/mmd-skills/develop/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LuisAlejandro/mash-design-skills/develop/install.sh | bash
 ```
 
-That fetches the toolkit, copies the Cursor skill pack into `~/.cursor/skills`, review agents into `~/.cursor/agents`, merges MCP `penpot-local` → `http://localhost:4401/mcp` and Context7 → `https://mcp.context7.com/mcp` into `~/.cursor/mcp.json`, and syncs the Compose stack to `~/.local/share/mmd-skills` (override with `MMD_STACK_ROOT`). It starts the stack unless OpenDesign already answers `/api/health`.
+A checkout installs from that checkout. `MASH_DESIGN_SKILLS` points the same
+script at another checkout:
 
-Then open **your app** in Cursor. Skills are already on this machine. Funnel output still lands in the app under `rosey/`.
+```bash
+MASH_DESIGN_SKILLS=/path/to/mash-design-skills \
+  bash /path/to/mash-design-skills/install.sh
+```
 
-Re-run the same curl to update. Flags: `curl -fsSL … | bash -s -- --no-start` (`--check`, `--no-stack`, `--no-agents`). From a clone, `./install.sh` still works.
+Re-running refreshes design-owned skills, agents, the `penpot-local` MCP entry,
+and the Compose stack. It does not write `.mash/` into the app.
 
-## After install
+Flags: `./install.sh --check`, `--version`, `--no-agents`, `--no-stack`,
+`--no-start`.
 
-1. Open [http://localhost:9001](http://localhost:9001) and log in with the local user from `mmd setup`. Activate the **penpot-local** MCP in Cursor.
-2. Compose OpenDesign uses port `7457` so it does not collide with a host Open Design app on `7456`.
-3. See [MCP](#mcp) for `penpot-local`, Context7, and the Penpot plugin connect step.
-4. `mmd setup` prompts for a **local Penpot** email/password (not penpot.app) and for a provider API key (Cursor / Anthropic / OpenAI). It writes the **stack** `penpot.env` (email only; password is not stored). Use `mmd auth` later for keys. Scripted installs: `MMD_NONINTERACTIVE=1` with `PENPOT_LOCAL_EMAIL` and `PENPOT_LOCAL_PASSWORD`, or `--skip-user` / `--skip-auth`. `mmd start` applies keys to harnesses. `pick-agent` only selects a harness that is on PATH and has matching credentials.
+### Global destinations
 
-OpenDesign UI: [http://127.0.0.1:7457](http://127.0.0.1:7457). Mailcatcher: [http://localhost:1080](http://localhost:1080).
+| Surface | Destination |
+| --- | --- |
+| Design manifest, pin, uninstaller | `~/.config/mash/design-install-manifest.json`, `design-stack.json`, `uninstall-design.sh` |
+| Skill npm dependencies | `~/.config/mash/node_modules/<skill>/` |
+| Skill Python virtualenvs | `~/.config/mash/venvs/<skill>/` |
+| Cursor skills and agents | `~/.cursor/skills/`, `~/.cursor/agents/` |
+| OpenCode skills and agents | `~/.config/opencode/skills/`, `~/.config/opencode/agents/` |
+| Pi skills and agents | `~/.pi/agent/skills/`, `~/.agents/` |
+| Cursor MCP | `penpot-local` in `~/.cursor/mcp.json` |
+| Compose stack | `~/.local/share/mash/design` (override with `MASH_DESIGN_STACK`) |
+| CLI | `~/.local/bin/mds` |
 
-## MCP
+`context7` and the other programming MCP servers belong to Mash Programming
+Skills. This installer does not add or remove them.
 
-`install.sh` merges both servers into `~/.cursor/mcp.json`:
+### What installation does
 
-- `penpot-local` → `http://localhost:4401/mcp` (`user-penpot-local` is the same snippet). Skills accept either name.
-- `context7` → `https://mcp.context7.com/mcp` for library docs some skills may use. That server is part of this pack.
+1. Prunes design skills and agents that the previous design manifest owned but
+   this tree no longer contains.
+2. Copies `src/skills/` and `src/agents/` into the three IDE homes.
+3. Installs each skill's npm and Python dependencies once under
+   `~/.config/mash/` and symlinks them into each copy.
+4. Merges `penpot-local` (`http://localhost:4401/mcp`) into `~/.cursor/mcp.json`.
+5. Syncs the Compose stack to `~/.local/share/mash/design`, writes
+   `~/.config/mash/design-stack.json`, and links `mds`.
+6. Runs `mds setup` when `penpot.env` is missing, then `mds start` unless
+   OpenDesign already answers `/api/health`.
 
-HTTP `:4401` is not enough. In Penpot, open the file and use **File → MCP Server → Connect**. Import never draws a board without the plugin on an open file.
+HTTP `:4401` is not enough. In Penpot, open the file and use **File → MCP
+Server → Connect**.
 
-## Stack CLI (`mmd`)
+## Requirements this pack does not install
 
-No Make. From a clone: `./bin/mmd <command>`. After install, `mmd` may be on `PATH` via `~/.local/bin`, or run `~/.local/share/mmd-skills/bin/mmd`. Developing this repo uses the clone as the stack root.
+An agent harness. Install at least one of `pi`, `opencode`, `cursor-agent`,
+`codex`, or `claude`. Docker and Docker Compose v2 are required for the stack.
+Node.js and Python 3 are required for skill dependencies.
+
+Mash Programming Skills is a separate install. It provides planning and review
+skills, always-on rules, and the shared MCP servers other than `penpot-local`.
+
+## Uninstallation
+
+Install copies `uninstall.sh` to `~/.config/mash/uninstall-design.sh`. That copy
+reads `design-install-manifest.json` and does not need this repository.
+`./uninstall.sh` in a checkout is the same script. Uninstallation is a dry run
+unless `--apply` is set:
+
+```bash
+~/.config/mash/uninstall-design.sh            # show what would be removed
+~/.config/mash/uninstall-design.sh --check    # exit 0 if the design payload is installed
+~/.config/mash/uninstall-design.sh --apply    # remove the design payload
+```
+
+`--apply` removes design-owned skills, agents, `penpot-local`, the stack pin,
+`~/.local/bin/mds`, and `~/.local/share/mash/design`. When the stack directory
+holds a Compose file, teardown asks for the project name.
+`MASH_DESIGN_CONFIRM_UNINSTALL=1` confirms that step when there is no terminal.
+App `.mash/` trees stay.
+
+`mds uninstall` runs the same script.
+
+## Stack CLI (`mds`)
+
+From a clone: `./bin/mds <command>`. After install, `mds` is on `PATH` via
+`~/.local/bin`, or run `~/.local/share/mash/design/bin/mds`. Developing this
+repo uses the clone as the stack root when you invoke `./bin/mds` with no
+`MASH_DESIGN_STACK`.
 
 | Command | What it does |
 | --- | --- |
-| `mmd setup` | Create `penpot.env`, generate secrets, local Penpot user (`--skip-user` / `PENPOT_LOCAL_EMAIL` + `PENPOT_LOCAL_PASSWORD`), optional provider keys (`--skip-auth` / `MMD_NONINTERACTIVE=1`), pull Penpot, build OpenDesign |
-| `mmd start` | `compose up --build --detach`, then apply harness logins |
-| `mmd auth` | Prompt for provider keys, recreate `open-design`, apply harness logins |
-| `mmd stop` | Stop containers |
-| `mmd down` | Stop and remove containers (keep volumes) |
-| `mmd restart` | Stop then start |
-| `mmd destroy` | Remove this project's containers, images, and volumes. Prints the stack, project name, and every named volume at risk, then requires typing the exact project name to confirm (`MMD_CONFIRM_DESTROY=1` for non-interactive use). Does not uninstall the CLI or skills |
-| `mmd uninstall` | Destroy the Compose project(s), then remove `~/.local/bin/mmd`, `~/.local/share/mmd-skills`, and the managed pack in `~/.cursor/skills` and `~/.cursor/agents`. Same exact-name confirmation as `destroy`, with its own bypass (`MMD_CONFIRM_UNINSTALL=1`) that `destroy`'s bypass cannot satisfy. Keeps `rosey/` |
-| `mmd logs` | Follow logs |
-| `mmd status` | `compose ps` |
-| `mmd update` | Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins |
-| `mmd backup` | Dump Postgres into `backups/`. PostgreSQL data only — does not cover Penpot assets, OpenDesign data, or OpenDesign home state; no restore path exists yet for those volumes |
-| `mmd doctor` | OpenDesign health, agent CLIs, runnable harness table |
-| `mmd convert` | Figma → Penpot via [figpot](https://github.com/betagouv/figpot) (optional; needs `.env`) |
+| `mds setup` | Create `penpot.env`, generate secrets, local Penpot user (`--skip-user` / `PENPOT_LOCAL_EMAIL` + `PENPOT_LOCAL_PASSWORD`), optional provider keys (`--skip-auth` / `MASH_DESIGN_NONINTERACTIVE=1`), pull Penpot, build OpenDesign |
+| `mds start` | `compose up --build --detach`, then apply harness logins |
+| `mds auth` | Prompt for provider keys, recreate `open-design`, apply harness logins |
+| `mds stop` | Stop containers |
+| `mds down` | Stop and remove containers (keep volumes) |
+| `mds restart` | Stop then start |
+| `mds destroy` | Remove this project's containers, images, and volumes. Prints the stack, project name, and every named volume at risk, then requires typing the exact project name to confirm (`MASH_DESIGN_CONFIRM_DESTROY=1` for non-interactive use). Does not uninstall the CLI or skills |
+| `mds uninstall` | Dry run of `uninstall.sh`. `--apply` removes the design payload |
+| `mds logs` | Follow logs |
+| `mds status` | `compose ps` |
+| `mds update` | Pull Penpot images, rebuild OpenDesign, recreate, apply harness logins |
+| `mds backup` | Dump Postgres into `backups/`. PostgreSQL data only — does not cover Penpot assets, OpenDesign data, or OpenDesign home state; no restore path exists yet for those volumes |
+| `mds doctor` | OpenDesign health, agent CLIs, runnable harness table |
+| `mds convert` | Figma → Penpot via [figpot](https://github.com/betagouv/figpot) (optional; needs `.env`) |
 
-Compose project name is `penpot` for the installed default share root and for an implicit clone-detected invocation, so existing volumes keep working. An explicit alternate `MMD_STACK_ROOT` derives its own stable project name instead, so distinct custom stack roots never collide under one Compose project. The stack is loopback-only. Do not publish the fat OpenDesign image (`penpot-opendesign:local` contains vendor CLIs).
+Compose project name is `penpot` for the installed default share root and for
+an implicit clone-detected invocation. An explicit alternate
+`MASH_DESIGN_STACK` derives its own stable project name instead. The stack is
+loopback-only. Do not publish the fat OpenDesign image
+(`penpot-opendesign:local` contains vendor CLIs).
 
-`penpot.env` and `.env` are created (and corrected on each `mmd setup`/`mmd auth`) with mode `0600` — owner read/write only. `docker compose config` (without `-q`) resolves and prints every interpolated secret in plaintext by design; do not paste its output into shared logs or issue reports.
+`penpot.env` and `.env` are created with mode `0600`. `docker compose config`
+(without `-q`) prints every interpolated secret. Do not paste its output into
+shared logs.
 
-If the daemon is down, invoke the **mmd-setup** skill or run `mmd start`. Do not start a host `opendesign` process.
+If the daemon is down, invoke the mash-design-setup skill or run `mds start`.
+Do not start a host `opendesign` process.
+
+Open [http://localhost:9001](http://localhost:9001) and log in with the local
+user from `mds setup`. OpenDesign UI: [http://127.0.0.1:7457](http://127.0.0.1:7457).
+Mailcatcher: [http://localhost:1080](http://localhost:1080). Port `7457` avoids
+a host Open Design app on `7456`.
 
 ## Convert (Figma → Penpot), optional
 
 1. Copy `.env.example` to `.env` in the stack root and fill tokens and URLs.
 2. Create an empty file in local Penpot and copy its URL (`file-id=...`).
-3. `mmd convert`
+3. `mds convert`
 
-`convert.sh` runs `npx @betagouv/figpot` on the host.
-
-## Layout
+## Repository files
 
 | Path | Role |
 | --- | --- |
-| `install.sh` | Copy skills/agents to `~/.cursor`; sync/start the machine stack |
-| `bin/mmd` | Stack lifecycle (no Make) |
-| `docker-compose.yaml` | Official Penpot compose plus `open-design` on `127.0.0.1:7457` and MCP on `4401` |
-| `docker/opendesign/` | Image: `ghcr.io/nexu-io/od` plus Linux `cursor-agent`, `claude`, `codex`, `opencode`, `pi` |
-| `.cursor/skills/` | Funnel skills (source pack; installer copies to `~/.cursor/skills`) |
-| `.agents/shared/lib/` | OpenDesign daemon helpers (installer copies to the stack `lib/`) |
-| `.cursor/mcp.json` | Tracked Cursor MCP: Context7 + `penpot-local` |
-| `mcp.json.example` | Same snippet for hand-merging into `~/.cursor/mcp.json` |
-| `LICENSE` / `NOTICE` | MIT for this repo; third-party attribution |
+| `install.sh` / `uninstall.sh` | Global install and manifest-scoped uninstall |
+| `src/skills/` | Funnel skills (source pack) |
+| `src/agents/` | Review, sync, and iterator agents |
+| `scripts/` | OpenDesign daemon helpers |
+| `bin/mds` | Stack lifecycle |
+| `docker-compose.yaml` | Penpot compose plus `open-design` on `127.0.0.1:7457` and MCP on `4401` |
+| `docker/opendesign/` | Image `penpot-opendesign:local` |
+| `mcp.json.example` | `penpot-local` snippet for `~/.cursor/mcp.json` |
 | `penpot.env.example` | Instance version, public URI, OpenDesign token and API keys |
+| `AGENTS.md` | Maintainer map for this repo |
 
 Do not commit `penpot.env` or `.env`.
 
-
-## references to add
+## References
 
 https://www.skills.sh/anthropics/skills/canvas-design
 https://www.skills.sh/anthropics/skills/frontend-design

@@ -9,6 +9,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 pipeline-smoke/
-rosey/
+.mash/designs/
+.mash/design-system/
 .cursor/penpot-implement-state-*.json
 inspiration/
