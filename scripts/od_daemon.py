@@ -54,6 +54,7 @@ AGENT_UNAVAILABLE_HINT = (
     "Do not invent HTML."
 )
 CREDENTIAL_ENV_KEYS = ("CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+RUN_SETTING_ENV_KEYS = ("OPEN_DESIGN_RUN_AGENT", "OPEN_DESIGN_RUN_MODEL")
 PREFERRED_RUN_AGENTS = ("claude", "codex", "opencode", "pi")
 MAKE_START_HINT = START_HINT
 
@@ -290,7 +291,7 @@ def merge_stack_credentials(
     file_env: dict[str, str] = {}
     if config is not None and config.env_path is not None:
         file_env = _parse_env_file(config.env_path)
-    for key in CREDENTIAL_ENV_KEYS:
+    for key in (*CREDENTIAL_ENV_KEYS, *RUN_SETTING_ENV_KEYS):
         if not str(merged.get(key, "")).strip() and file_env.get(key, "").strip():
             merged[key] = file_env[key].strip()
     return merged
@@ -405,6 +406,23 @@ def pick_run_agent(
         if name in runnable:
             return name
     raise RuntimeError(AGENT_UNAVAILABLE_HINT)
+
+
+def pick_run_model(
+    *,
+    environ: dict[str, str] | None = None,
+    config: DaemonConfig | None = None,
+) -> str:
+    """Model for OpenDesign runs. "" means the daemon picks (Auto).
+
+    ``OPEN_DESIGN_RUN_MODEL`` in the process env or the stack penpot.env is the
+    only source; callers may still pass an explicit model that wins over this.
+    """
+    if environ is None:
+        env = merge_stack_credentials(dict(os.environ), config or load_daemon_config())
+    else:
+        env = merge_stack_credentials(dict(environ), config)
+    return (env.get("OPEN_DESIGN_RUN_MODEL") or "").strip()
 
 
 def seed_studio_prefs(agent_id: str, *, now_ms: int | None = None) -> dict[str, Any]:
@@ -558,6 +576,13 @@ def _cli(argv: list[str] | None = None) -> int:
     pick.add_argument("--repo-root", type=Path, default=None)
     pick.add_argument("--stack-root", type=Path, default=None)
 
+    pick_model = sub.add_parser(
+        "pick-model",
+        help="Print the OpenDesign run model from OPEN_DESIGN_RUN_MODEL (empty for Auto)",
+    )
+    pick_model.add_argument("--repo-root", type=Path, default=None)
+    pick_model.add_argument("--stack-root", type=Path, default=None)
+
     seed = sub.add_parser(
         "seed-studio",
         help="Mark OpenDesign onboarding complete and set agentId from pick-agent",
@@ -595,6 +620,10 @@ def _cli(argv: list[str] | None = None) -> int:
     if args.command == "pick-agent":
         require_health(cfg)
         print(pick_run_agent(config=cfg))
+        return 0
+
+    if args.command == "pick-model":
+        print(pick_run_model(config=cfg))
         return 0
 
     if args.command == "seed-studio":

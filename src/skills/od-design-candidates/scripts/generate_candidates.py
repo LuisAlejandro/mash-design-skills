@@ -142,6 +142,7 @@ def write_candidates_metadata(
     design_ctx: dict,
     variation_plan: dict,
     results: list[dict],
+    run_model: str | None = None,
 ) -> Path:
     out_path = candidates_json_path(repo_root, page_slug)
     meta = {
@@ -162,6 +163,7 @@ def write_candidates_metadata(
             "plannerAgent": variation_plan.get("plannerAgent"),
             "plannerModel": variation_plan.get("plannerModel"),
         },
+        "runModel": run_model,
         "variations": [
             {
                 "variation": r["variation"],
@@ -202,6 +204,8 @@ def generate_candidates(
     sleep = sleep_fn or time.sleep
     design_ctx = load_design_system_context(repo_root)
     design_system_id = design_ctx["design_system_id"]
+    if model is None:
+        model = client.resolve_run_model() or None
 
     cand_root = candidates_dir(repo_root, page_slug)
     cand_root.mkdir(parents=True, exist_ok=True)
@@ -284,7 +288,7 @@ def generate_candidates(
         raise
 
     meta_path = write_candidates_metadata(
-        repo_root, page_slug, brief, design_ctx, variation_plan, results
+        repo_root, page_slug, brief, design_ctx, variation_plan, results, run_model=model
     )
     return {
         "candidates_json": meta_path,
@@ -301,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--brief-file", required=True, type=Path)
     parser.add_argument("--variation-plan", required=True, type=Path)
     parser.add_argument("--daemon-url", default=None)
-    parser.add_argument("--model", default=None)
+    parser.add_argument("--model", default=None, help="OpenDesign run model (default: OPEN_DESIGN_RUN_MODEL, empty = Auto)")
     parser.add_argument("--pause-seconds", type=float, default=PAUSE_BETWEEN_VARIATIONS)
     parser.add_argument("--skip-screenshots", action="store_true")
     parser.add_argument("--verbose", action="store_true")

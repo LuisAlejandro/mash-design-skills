@@ -1,5 +1,8 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { resolveColor, resolveRadius, resolveShadow, resolveSpacing, type TokenFile } from '../../src/tools/tokens.js'
+import { loadTokenFile, resolveColor, resolveRadius, resolveShadow, resolveSpacing, type TokenFile } from '../../src/tools/tokens.js'
 
 const tokens: TokenFile = {
   colors: { accent: '#7AA2FF' },
@@ -10,6 +13,13 @@ const tokens: TokenFile = {
     ring: { style: 'inner-shadow', color: { token: 'accent' }, opacity: 1, offsetX: 0, offsetY: 0, blur: 0, spread: 2 },
   },
 }
+
+describe('loadTokenFile', () => {
+  it('returns an empty color map when the file is missing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'penpot-tokens-'))
+    await expect(loadTokenFile(join(dir, 'missing.json'))).resolves.toEqual({ colors: {} })
+  })
+})
 
 describe('resolveColor', () => {
   it('passes through a literal hex string unchanged', () => {

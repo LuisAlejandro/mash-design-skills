@@ -54,14 +54,100 @@ function parseColor(value) {
   return null;
 }
 
+function expandBox(value) {
+  if (value == null || value === "") return {};
+  const parts = String(value).trim().split(/\s+/);
+  const nums = parts.map((part) => parsePx(part, null));
+  if (nums.some((n) => n == null) || nums.length === 0) return {};
+  if (nums.length === 1) return { top: nums[0], right: nums[0], bottom: nums[0], left: nums[0] };
+  if (nums.length === 2) return { top: nums[0], right: nums[1], bottom: nums[0], left: nums[1] };
+  if (nums.length === 3) return { top: nums[0], right: nums[1], bottom: nums[2], left: nums[1] };
+  return { top: nums[0], right: nums[1], bottom: nums[2], left: nums[3] };
+}
+
 function parseSpacingBox(styles, prefix) {
-  const all = parsePx(styles[prefix], null);
+  const shorthand = expandBox(styles[prefix]);
   return {
-    top: parsePx(styles[`${prefix}-top`], all) ?? 0,
-    right: parsePx(styles[`${prefix}-right`], all) ?? 0,
-    bottom: parsePx(styles[`${prefix}-bottom`], all) ?? 0,
-    left: parsePx(styles[`${prefix}-left`], all) ?? 0,
+    top: parsePx(styles[`${prefix}-top`], shorthand.top ?? 0) ?? 0,
+    right: parsePx(styles[`${prefix}-right`], shorthand.right ?? 0) ?? 0,
+    bottom: parsePx(styles[`${prefix}-bottom`], shorthand.bottom ?? 0) ?? 0,
+    left: parsePx(styles[`${prefix}-left`], shorthand.left ?? 0) ?? 0,
   };
+}
+
+function resolveCssValue(value, variables, seen = new Set(), depth = 0) {
+  if (value == null || depth > 8) return value == null ? "" : String(value);
+  return String(value).replace(/var\(\s*(--[A-Za-z0-9-_]+)(?:\s*,\s*([^)]*))?\)/g, (full, name, fallback) => {
+    if (seen.has(name)) return fallback ? fallback.trim() : full;
+    const next = variables[name];
+    if (next == null) return fallback ? resolveCssValue(fallback.trim(), variables, seen, depth + 1) : full;
+    seen.add(name);
+    const resolved = resolveCssValue(next, variables, seen, depth + 1);
+    seen.delete(name);
+    return resolved;
+  });
+}
+
+function resolveCssVariables(variables) {
+  const resolved = {};
+  for (const [name, value] of Object.entries(variables || {})) {
+    resolved[name] = resolveCssValue(value, variables);
+  }
+  for (const [name, value] of Object.entries(resolved)) {
+    resolved[name] = resolveCssValue(value, resolved);
+  }
+  return resolved;
+}
+
+function stripAtMedia(css) {
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const at = css.indexOf("@media", i);
+    if (at === -1) {
+      out += css.slice(i);
+      break;
+    }
+    out += css.slice(i, at);
+    const open = css.indexOf("{", at);
+    if (open === -1) break;
+    let depth = 0;
+    let j = open;
+    for (; j < css.length; j += 1) {
+      if (css[j] === "{") depth += 1;
+      else if (css[j] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          j += 1;
+          break;
+        }
+      }
+    }
+    i = j;
+  }
+  return out;
+}
+
+function trackCount(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "none") return 0;
+  const repeat = raw.match(/^repeat\(\s*(\d+)/i);
+  if (repeat) return Number(repeat[1]);
+  let depth = 0;
+  let count = 0;
+  let token = "";
+  const flush = () => {
+    if (token.trim()) count += 1;
+    token = "";
+  };
+  for (const ch of raw) {
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    if (/\s/.test(ch) && depth === 0) flush();
+    else token += ch;
+  }
+  flush();
+  return count;
 }
 
 function isSkippedTag(tag) {
@@ -98,10 +184,10 @@ function paletteFor(color, palette, usedNames) {
 function collectCssVariables(serialized, tokenResult) {
   const palette = {};
   const used = new Set();
-  const vars = {
+  const vars = resolveCssVariables({
     ...(serialized.cssVariables || {}),
     ...(tokenResult?.extractedTokens?.cssVariables || {}),
-  };
+  });
   for (const [rawName, rawValue] of Object.entries(vars)) {
     const color = parseColor(rawValue);
     if (!color) continue;
@@ -122,7 +208,13 @@ function inferFlex(styles) {
   if (display === "flex" || display === "inline-flex" || direction) {
     return direction === "column" || direction === "column-reverse" ? "column" : "row";
   }
-  if (display === "grid") return "column";
+  if (display === "grid" || display === "inline-grid") {
+    const cols = trackCount(styles["grid-template-columns"]);
+    const rows = trackCount(styles["grid-template-rows"]);
+    if (cols > 1) return "row";
+    if (rows > 1 && cols <= 1) return "column";
+    return "row";
+  }
   return null;
 }
 
@@ -188,7 +280,9 @@ function mapNode(node, ctx) {
     };
   }
 
-  const dir = inferFlex(styles);
+  let dir = inferFlex(styles);
+  if (node.tag === "tr") dir = "row";
+  else if (node.tag === "table" || node.tag === "thead" || node.tag === "tbody") dir = "column";
   const bg = paletteFor(parseColor(styles["background-color"] || styles.background), ctx.palette, ctx.usedTokenNames);
   const width = parsePx(styles.width, null);
   const height = parsePx(styles.height, null);
@@ -222,26 +316,62 @@ function mapNode(node, ctx) {
 }
 
 function applyStyleBlocks(serialized) {
+  const variables = resolveCssVariables(serialized.cssVariables || {});
+  serialized.cssVariables = variables;
   const rules = [];
   for (const block of serialized.styleBlocks || []) {
-    const cleaned = String(block).replace(/\/\*[\s\S]*?\*\//g, "");
+    const cleaned = stripAtMedia(String(block).replace(/\/\*[\s\S]*?\*\//g, ""));
     const regex = /([^{]+)\{([^}]+)\}/g;
     let match;
     while ((match = regex.exec(cleaned))) {
       const styles = parseStyle(match[2]);
       for (const selector of match[1].split(",")) {
         const sel = selector.trim();
-        if (sel && sel !== ":root") rules.push({ sel, styles });
+        if (sel && sel !== ":root" && !sel.startsWith("@")) rules.push({ sel, styles });
       }
     }
   }
 
-  function matches(node, sel) {
-    if (node.type !== "element") return false;
-    if (sel.startsWith(".")) return (node.classes || []).includes(sel.slice(1).split(/[:[\s]/)[0]);
-    if (sel.startsWith("#")) return node.attrs?.id === sel.slice(1).split(/[:[\s]/)[0];
-    return node.tag === sel.toLowerCase().split(/[:[\s]/)[0];
+  function matchesSimple(node, sel) {
+    if (!node || node.type !== "element") return false;
+    const base = sel.trim().split(/[:[]/)[0];
+    if (!base || /[>+~]/.test(base)) return false;
+    if (base.startsWith(".")) return (node.classes || []).includes(base.slice(1));
+    if (base.startsWith("#")) return node.attrs?.id === base.slice(1);
+    return node.tag === base.toLowerCase();
   }
+
+  function matches(node, sel) {
+    const parts = sel.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return false;
+    let current = node;
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      if (i === parts.length - 1) {
+        if (!matchesSimple(current, parts[i])) return false;
+        continue;
+      }
+      let ancestor = current.parent;
+      let found = false;
+      while (ancestor) {
+        if (matchesSimple(ancestor, parts[i])) {
+          current = ancestor;
+          found = true;
+          break;
+        }
+        ancestor = ancestor.parent;
+      }
+      if (!found) return false;
+    }
+    return true;
+  }
+
+  function linkParents(node, parent = null) {
+    if (!node || typeof node !== "object") return;
+    node.parent = parent;
+    for (const child of node.children || []) linkParents(child, node);
+  }
+
+  linkParents(serialized.dom);
 
   walk(serialized.dom, (node) => {
     if (node.type !== "element") return;
@@ -249,7 +379,11 @@ function applyStyleBlocks(serialized) {
     for (const rule of rules) {
       if (matches(node, rule.sel)) merged = { ...merged, ...rule.styles };
     }
-    node.styles = { ...merged, ...(node.styles || {}) };
+    const styles = {};
+    for (const [key, value] of Object.entries({ ...merged, ...(node.styles || {}) })) {
+      styles[key] = resolveCssValue(value, variables);
+    }
+    node.styles = styles;
   });
 }
 
@@ -263,11 +397,45 @@ function findBody(serialized) {
   return body || root;
 }
 
+function fontFamilyName(value) {
+  if (!value) return "";
+  return String(value).split(",")[0].replace(/['"]/g, "").trim();
+}
+
 function buildTypography(serialized) {
+  const body = findBody(serialized);
+  const bodyStyles = body?.styles || {};
+  let headingStyles = null;
+  walk(serialized.dom, (node) => {
+    if (!headingStyles && node.type === "element" && node.tag === "h1") headingStyles = node.styles || {};
+  });
+  const bodyFamily = fontFamilyName(bodyStyles["font-family"]) || "Inter";
+  const headingFamily = fontFamilyName(headingStyles?.["font-family"]) || bodyFamily;
   return {
-    heading: { family: "Inter", size: 32, weight: 700, lineHeight: 1.2 },
-    body: { family: "Inter", size: 16, weight: 400, lineHeight: 1.5 },
+    heading: {
+      family: headingFamily,
+      size: parsePx(headingStyles?.["font-size"], 32) || 32,
+      weight: parsePx(headingStyles?.["font-weight"], 700) || 700,
+      lineHeight: 1.2,
+    },
+    body: {
+      family: bodyFamily,
+      size: parsePx(bodyStyles["font-size"], 16) || 16,
+      weight: parsePx(bodyStyles["font-weight"], 400) || 400,
+      lineHeight: 1.5,
+    },
   };
+}
+
+function spacingFromVariables(variables) {
+  const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 40 };
+  for (const [name, value] of Object.entries(variables || {})) {
+    if (!/space|gap|padding|margin/i.test(name)) continue;
+    const px = parsePx(value, null);
+    if (px == null) continue;
+    spacing[tokenNameFromCssVar(name)] = px;
+  }
+  return spacing;
 }
 
 function main() {
@@ -347,7 +515,7 @@ function main() {
     },
     tokens: {
       palette,
-      spacing: { xs: 4, sm: 8, md: 16, lg: 24, xl: 40 },
+      spacing: spacingFromVariables(serialized.cssVariables),
       typography: buildTypography(serialized),
     },
     assets: ctx.assets,

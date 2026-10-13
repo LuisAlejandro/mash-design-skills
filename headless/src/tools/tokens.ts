@@ -4,8 +4,9 @@
  * Loads and validates a project's design-token file, and resolves
  * `{ token: "name" }` references against it. This is the one seam that
  * keeps the MCP server itself free of any project-specific color/font/
- * spacing/radius/shadow values — every consuming project supplies its own
- * token file at PENPOT_TOKENS_PATH.
+ * spacing/radius/shadow values. A missing token file is an empty map so
+ * literal hex, spacing, and radius values still work. `{ token: "name" }`
+ * references resolve against the file when it exists.
  */
 
 import { readFile } from 'node:fs/promises'
@@ -46,12 +47,16 @@ const tokenFileSchema = z.object({
 
 export type TokenFile = z.infer<typeof tokenFileSchema>
 
+const emptyTokenFile: TokenFile = { colors: {} }
+
 export async function loadTokenFile(path: string): Promise<TokenFile> {
   const absolutePath = resolve(path)
   let raw: string
   try {
     raw = await readFile(absolutePath, 'utf-8')
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return emptyTokenFile
     throw new Error(`Could not read token file at ${absolutePath}`)
   }
 

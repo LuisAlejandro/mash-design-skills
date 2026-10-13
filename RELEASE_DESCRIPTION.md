@@ -1,0 +1,1 @@
+Mash Design Skills is the design-to-code pack that sits beside Mash Programming Skills. OpenDesign explores HTML, Penpot holds the canonical design file, and Penpot implement ships production code. You install the skills once on this machine and run Penpot + OpenDesign as a machine-local Docker stack, with design artifacts kept in the app under `.mash/`.

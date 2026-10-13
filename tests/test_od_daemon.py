@@ -20,6 +20,7 @@ from od_daemon import (  # noqa: E402
     merge_stack_credentials,
     parse_agent_ids,
     pick_run_agent,
+    pick_run_model,
     runnable_agent_ids,
     seed_studio_prefs,
     _parse_env_file,
@@ -288,6 +289,44 @@ def test_pick_run_agent_fails_without_match():
         assert AGENT_UNAVAILABLE_HINT in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_pick_run_model_reads_env_and_penpot_env(tmp_path: Path):
+    cfg = DaemonConfig(
+        url="http://127.0.0.1:7457",
+        token="t",
+        repo_root=None,
+        env_path=None,
+    )
+    assert pick_run_model(environ={}, config=cfg) == ""
+
+    env_path = tmp_path / "penpot.env"
+    env_path.write_text("OPEN_DESIGN_RUN_MODEL=from-file\n", encoding="utf-8")
+    cfg = DaemonConfig(
+        url="http://127.0.0.1:7457",
+        token="t",
+        repo_root=None,
+        env_path=env_path,
+    )
+    assert pick_run_model(environ={}, config=cfg) == "from-file"
+    assert pick_run_model(environ={"OPEN_DESIGN_RUN_MODEL": "from-proc"}, config=cfg) == "from-proc"
+
+
+def test_merge_stack_credentials_reads_run_settings(tmp_path: Path):
+    env_path = tmp_path / "penpot.env"
+    env_path.write_text(
+        "OPEN_DESIGN_RUN_AGENT=claude\nOPEN_DESIGN_RUN_MODEL=sonnet\nCURSOR_API_KEY=\n",
+        encoding="utf-8",
+    )
+    cfg = DaemonConfig(
+        url="http://127.0.0.1:7457",
+        token="t",
+        repo_root=None,
+        env_path=env_path,
+    )
+    merged = merge_stack_credentials({"CURSOR_API_KEY": "from-proc"}, cfg)
+    assert merged["OPEN_DESIGN_RUN_AGENT"] == "claude"
+    assert merged["OPEN_DESIGN_RUN_MODEL"] == "sonnet"
 
 
 def test_seed_studio_prefs_marks_onboarding_complete():

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Harbor Board</title>
+    <style>
+      :root {
+        --color-surface: #f7f4ee;
+        --color-alert: #9a3b2f;
+        --bg: var(--color-surface);
+        --space-4: 24px;
+        --space-5: 32px;
+        --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+        --text-title: 40px;
+        --text-body: 16px;
+      }
+      body {
+        background: var(--color-surface);
+        color: #1c2b33;
+        font-family: var(--font-sans);
+        font-size: var(--text-body);
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--space-4);
+      }
+      .board {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-5);
+      }
+      h1 { font-size: var(--text-title); font-weight: 650; }
+      .metric-alert .metric-value { color: var(--color-alert); }
+      table.arrivals-table { width: 100%; }
+      @media (max-width: 720px) {
+        .arrivals-table thead {
+          width: 1px;
+          height: 1px;
+        }
+        .arrivals-table td {
+          display: flex;
+          justify-content: space-between;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <h1>Harbor Board</h1>
+      <section class="metrics">
+        <article class="metric"><p>Vessels</p></article>
+        <article class="metric"><p>Departures</p></article>
+        <article class="metric metric-alert"><p class="metric-value">2</p></article>
+      </section>
+      <table class="arrivals-table">
+        <tbody>
+          <tr>
+            <td>North Pier</td>
+            <td>14:10</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

@@ -39,7 +39,7 @@ Strip the mode token before resolving inputs. If no mode token is present, set `
 - `pageSlug`: kebab-case page id (required; derive from brief title if interactive and missing).
 - `repoRoot`: optional; default `pwd -P` (Cursor basedir).
 - `winnerVariation` / `winner:vN`: **not** used here — selection is `select_winner.py` or `penpot-design-pipeline`.
-- Optional: `model`, `daemonUrl` (override; default from `OPEN_DESIGN_DAEMON_URL` or `http://127.0.0.1:7457`), `skipScreenshots`.
+- Optional: `model` (OpenDesign run model; overrides `OPEN_DESIGN_RUN_MODEL` from `penpot.env`, empty = Auto), `daemonUrl` (override; default from `OPEN_DESIGN_DAEMON_URL` or `http://127.0.0.1:7457`), `skipScreenshots`.
 
 ## Prerequisites
 
@@ -106,12 +106,17 @@ PYTHON="${SKILLS}/od-design-candidates/.venv/bin/python"
 # fallback: python3 if venv missing and deps installed
 
 cd "${SKILLS}/od-design-candidates/scripts"
+MODEL="${MODEL:-$(python3 "${STACK}/lib/od_daemon.py" pick-model)}"   # invocation wins, else penpot.env
+
 "${PYTHON}" generate_candidates.py \
   --repo-root "${APP}" \
   --page-slug "<page-slug>" \
   --brief-file "${APP}/.mash/designs/<page-slug>/candidates/brief.txt" \
-  --variation-plan "${APP}/.mash/designs/<page-slug>/candidates/variation-plan.json"
+  --variation-plan "${APP}/.mash/designs/<page-slug>/candidates/variation-plan.json" \
+  ${MODEL:+--model "$MODEL"}
 ```
+
+Resolve `MODEL` from the invocation first, then `OPEN_DESIGN_RUN_MODEL` in the stack `penpot.env` (or process env). Omit `--model` when both are empty so OpenDesign uses Auto.
 
 Expect ~minutes × 3 OpenDesign runs (agent from `pick_run_agent`). On failure, surface the error; do not invent HTML.
 

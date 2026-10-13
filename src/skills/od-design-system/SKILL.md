@@ -48,6 +48,7 @@ Ask for or infer:
 - `revisionFeedback`: optional feedback to apply after draft creation.
 - `sectionTitle`: optional target section for revision feedback.
 - `daemonUrl`: optional override. Default is `OPEN_DESIGN_DAEMON_URL` or `http://127.0.0.1:7457`.
+- `model`: optional OpenDesign run model. Falls back to `OPEN_DESIGN_RUN_MODEL` from the stack `penpot.env` (or process env), then to Auto when neither is set.
 
 Workspace generation agent: run `python3 "${STACK}/lib/od_daemon.py" pick-agent`. Default is `cursor-agent` if `CURSOR_API_KEY` is set, then `claude` if Anthropic, then `codex` if OpenAI. `OPEN_DESIGN_RUN_AGENT` can force `opencode` or `pi` when that harness is on PATH **and** has matching Anthropic or OpenAI credentials. Unauthenticated OpenCode is not a default. If nothing is runnable, stop and tell the user to run `mds auth` then `mds start`.
 
@@ -290,7 +291,7 @@ Run package generation before copying through the same `/api/runs` path used by 
 test -n "$PROJECT_ID"
 
 AGENT_ID="$(python3 "${STACK}/lib/od_daemon.py" pick-agent)"
-MODEL="${MODEL:-}"
+MODEL="${MODEL:-$(python3 "${STACK}/lib/od_daemon.py" pick-model)}"
 
 GENERATION_PROMPT=$(cat <<'EOF'
 Create this project as a complete Open Design design system workspace.

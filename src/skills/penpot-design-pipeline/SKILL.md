@@ -41,7 +41,7 @@ If `mode:non-interactive` and candidates are not yet generated and winner is mis
 
 - `brief` / `briefFile`, `pageSlug` — required for candidates stage
 - `winner:v1|v2|v3` or `winnerVariation:1|2|3` — required before promote stages
-- Optional: `model`, `skipCandidates` (reuse existing candidates), `skipImport` (Penpot board already exists)
+- Optional: `model` (OpenDesign run model for Stages 0 and A; overrides `OPEN_DESIGN_RUN_MODEL` from `penpot.env`), `skipCandidates` (reuse existing candidates), `skipImport` (Penpot board already exists)
 
 ## Hard pick gate
 
@@ -60,11 +60,11 @@ After `od-design-candidates` succeeds:
 
 Skip when `skipCandidates` is set.
 
-If `.mash/design-system/DESIGN.md` or `.mash/designs/design-system.json` (`designSystemId`) is missing, invoke **`od-design-system`** with the same mode token. Wait until both exist. Candidates will not run without them.
+If `.mash/design-system/DESIGN.md` or `.mash/designs/design-system.json` (`designSystemId`) is missing, invoke **`od-design-system`** with the same mode token and `model`. Wait until both exist. Candidates will not run without them.
 
 ### Stage A — Candidates
 
-Invoke **`od-design-candidates`** with the same mode token and brief/pageSlug.
+Invoke **`od-design-candidates`** with the same mode token, `model`, and brief/pageSlug.
 
 Wait for `DESIGN_CANDIDATES_HANDOFF` with `SUCCESS: true`.
 

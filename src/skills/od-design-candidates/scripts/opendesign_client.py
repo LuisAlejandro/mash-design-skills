@@ -56,6 +56,7 @@ from od_daemon import (  # noqa: E402
     make_start_message,
     parse_agent_ids,
     pick_run_agent,
+    pick_run_model,
     read_project_file,
 )
 
@@ -151,6 +152,10 @@ class OpenDesignClient:
             available = []
         return pick_run_agent(available=available)
 
+    def resolve_run_model(self) -> str:
+        """Explicit --model wins; otherwise OPEN_DESIGN_RUN_MODEL ("" = Auto)."""
+        return pick_run_model(config=self._config)
+
     def create_project(
         self,
         name: str,
@@ -194,6 +199,8 @@ class OpenDesignClient:
         sleep = sleep_fn or time.sleep
         run_message = SKIP_DISCOVERY_PREFIX + message.strip()
         agent_id = self.resolve_run_agent()
+        if model is None:
+            model = self.resolve_run_model()
         body: dict[str, Any] = {
             "projectId": project_id,
             "agentId": agent_id,

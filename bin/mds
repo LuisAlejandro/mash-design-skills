@@ -17,6 +17,22 @@ print_success() { echo -e "${GREEN}$1${NC}"; }
 print_info() { echo -e "${YELLOW}$1${NC}"; }
 print_step() { echo -e "${BLUE}$1${NC}"; }
 
+# The skill dependencies (a playwright venv and three npm stores, about 175 MB)
+# are not shipped in Mash's bundle: they are only useful once this stack is set
+# up. Mash provides the installer; without it, nothing here needs doing and the
+# toolkit's own install.sh has already handled it.
+ensure_skill_deps() {
+  local helper="${MASH_DESIGN_DEPS:-mash-design-deps}"
+  command -v "$helper" >/dev/null 2>&1 || return 0
+  print_step "Installing skill dependencies..."
+  if "$helper"; then
+    print_success "Skill dependencies ready"
+  else
+    print_error "Skill dependencies did not install; re-run with: $helper"
+  fi
+  echo ""
+}
+
 script_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 }
@@ -747,6 +763,7 @@ cmd_setup() {
   prompt_provider_auth 0
   echo ""
 
+  ensure_skill_deps
   print_step "Pulling Penpot Docker images..."
   compose pull penpot-frontend penpot-backend penpot-exporter \
     penpot-postgres penpot-valkey penpot-mailcatch
@@ -806,6 +823,8 @@ cmd_start() {
   fi
   echo "Starting Penpot and OpenDesign..."
   compose up --remove-orphans --build --detach
+  # Repairs a stack set up before the dependencies were split out of the app.
+  ensure_skill_deps
   echo "Penpot:     http://localhost:9001"
   echo "MCP:        penpot-local (stdio)"
   echo "OpenDesign: http://127.0.0.1:7457"

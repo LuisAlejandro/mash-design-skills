@@ -769,7 +769,9 @@ function buildShapeObject(spec: ShapeSpec, tokens: TokenFile): Record<string, un
         fontWeight: spec.fontWeight,
         fillColor: spec.fillColor ? resolveColor(spec.fillColor, tokens) : undefined,
         shadows: resolveShadows(spec.shadows, tokens),
-        growType: spec.growType,
+        // Callers always pass a box. auto-width collapses to nothing in the exporter
+        // when the font cannot be measured, so a fixed box is the default.
+        growType: spec.growType ?? 'fixed',
         verticalAlign: spec.verticalAlign,
       })
     case 'circle':
@@ -968,7 +970,11 @@ function makeAddShapes(defaultTokensPath: string): ToolDefinition<z.infer<Return
       const tokens = await loadTokenFile(tokensPath)
       const file = await client.getFile(fileId)
       const changes = shapes.map((spec) => {
-        const obj = buildShapeObject(spec, tokens)
+        // A nested shape whose frame id was left at the page root is not drawn inside its parent.
+        const requestedFrame = spec.frameId ?? ROOT_FRAME_ID
+        const frameId =
+          requestedFrame === ROOT_FRAME_ID && spec.parentId !== ROOT_FRAME_ID ? spec.parentId : requestedFrame
+        const obj = buildShapeObject({ ...spec, frameId }, tokens)
         return addObj(pageId, obj)
       })
       const result = await client.updateFile(fileId, file.revn, file.vern, changes)
@@ -1059,6 +1065,40 @@ const shapePatchSchema = z.object({
 })
 
 type ShapePatch = z.infer<typeof shapePatchSchema>
+
+const LAYOUT_ITEM_CAMEL_KEYS = [
+  'layoutItemAbsolute',
+  'layoutItemZIndex',
+  'layoutItemHSizing',
+  'layoutItemVSizing',
+  'layoutItemAlignSelf',
+  'layoutItemMargin',
+  'layoutItemMaxW',
+  'layoutItemMaxH',
+  'layoutItemMinW',
+  'layoutItemMinH',
+  'layoutItemRow',
+  'layoutItemColumn',
+  'layoutItemRowSpan',
+  'layoutItemColumnSpan',
+] as const
+
+const LAYOUT_ITEM_KEBAB_KEYS = [
+  'layout-item-absolute',
+  'layout-item-z-index',
+  'layout-item-h-sizing',
+  'layout-item-v-sizing',
+  'layout-item-align-self',
+  'layout-item-margin',
+  'layout-item-max-w',
+  'layout-item-max-h',
+  'layout-item-min-w',
+  'layout-item-min-h',
+  'layout-item-row',
+  'layout-item-column',
+  'layout-item-row-span',
+  'layout-item-column-span',
+] as const
 
 /**
  * Builds the `add-obj` change that applies `patch` on top of `existing`, shared by
@@ -1158,6 +1198,11 @@ function buildUpdateChange(
         fontFamily: patch.fontFamily ?? current.fontFamily,
         fontSize: patch.fontSize ?? current.fontSize,
         fontWeight: patch.fontWeight ?? current.fontWeight,
+        fillColor: patch.fillColor
+          ? resolveColor(patch.fillColor, tokens)
+          : current.fills?.[0] && 'fill-color' in current.fills[0]
+            ? current.fills[0]['fill-color']
+            : undefined,
         growType: resolvedGrowType as 'auto-width' | 'auto-height' | 'fixed' | undefined,
         verticalAlign: resolvedVerticalAlign as 'top' | 'center' | 'bottom' | undefined,
       })
@@ -1286,6 +1331,12 @@ function buildUpdateChange(
   delete merged.transformInverse
   delete merged.hideFillOnExport
   delete merged.growType
+  // get-file keeps camelCase layout-item twins. A replaced layoutItem must drop the ones it
+  // does not set, or a stale grid cell keeps hiding the shape after the parent becomes flex.
+  if (patch.layoutItem) {
+    for (const key of LAYOUT_ITEM_CAMEL_KEYS) delete merged[key]
+    for (const key of LAYOUT_ITEM_KEBAB_KEYS) if (!(key in obj)) delete merged[key]
+  }
   if (existing.type === 'frame' && patch.layout !== undefined) {
     const layout = resolveLayout(patch.layout, tokens)
     if (layout) merged = replaceFrameLayout(merged, layout)
