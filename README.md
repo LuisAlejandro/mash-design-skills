@@ -6,8 +6,8 @@ Mash Design Skills is the design-to-code pack that sits beside
 [Penpot](https://penpot.app) is the canonical file. Penpot implement ships code.
 You install the skills once on this machine and run Penpot + OpenDesign as a
 machine-local Docker stack. Design artifacts stay in the app under `.mash/`.
-This project's files are MIT ([LICENSE](LICENSE)); third-party stack pieces are
-listed in [NOTICE](NOTICE).
+This project is GPLv3 ([LICENSE](LICENSE)); third-party stack pieces are listed
+in [NOTICE](NOTICE).
 
 ```text
 od-design-system? → od-design-candidates → [pick winner]

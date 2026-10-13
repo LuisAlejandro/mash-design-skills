@@ -2,9 +2,10 @@ Mash Design Skills
 Copyright (c) 2026 Luis Alejandro
 
 This repository's original scripts, Cursor skills, agents, Dockerfile wrapper,
-and documentation are licensed under the MIT License (see LICENSE). That grant
-covers this project's files only. It does not relicense third-party software
-pulled in by Docker Compose, image builds, or optional converters.
+and documentation are licensed under the GNU General Public License, version 3
+(see LICENSE). That grant covers this project's files only. It does not
+relicense third-party software pulled in by Docker Compose, image builds, or
+optional converters.
 
 Third-party components used at runtime or build time:
 
