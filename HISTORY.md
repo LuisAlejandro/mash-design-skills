@@ -1,9 +1,11 @@
 # Changelog
 
 
-## (unreleased)
+## 0.1.1 (2026-10-17)
 
 ### Added
+
+* Publish HISTORY.md and drop empty 'update' subjects. [Luis Alejandro Martínez Faneyth]
 
 * Add the release system and the test gate. [Luis Alejandro Martínez Faneyth]
 
@@ -11,6 +13,11 @@
 ### Changed
 
 * Clarify where Figpot and stack settings live. [Luis Alejandro Martínez Faneyth]
+
+
+### Fixed
+
+* Keep the skills' working state out of the repo. [Luis Alejandro Martínez Faneyth]
 
 
 ### Other

@@ -58,7 +58,7 @@ else
 fi
 
 VERSION_FILE="$SOURCE_ROOT/VERSION"
-INSTALL_VERSION="0.1.0"
+INSTALL_VERSION="0.1.1"
 DEFAULT_STACK="${HOME}/.local/share/mash/design"
 CURSOR_SKILLS="${HOME}/.cursor/skills"
 CURSOR_AGENTS="${HOME}/.cursor/agents"
