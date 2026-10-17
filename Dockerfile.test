@@ -1,0 +1,23 @@
+# Test-only image: Python tests and Node skill/headless tests share one toolchain.
+# It is unrelated to the Penpot + OpenDesign runtime stack owned by bin/mds.
+FROM node:22-bookworm-slim AS node
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libstdc++6 libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+
+WORKDIR /workspace
+COPY headless/package.json headless/package-lock.json /workspace/headless/
+COPY src/skills/penpot-import-html/package.json src/skills/penpot-import-html/package-lock.json /workspace/src/skills/penpot-import-html/
+COPY src/skills/penpot-implement-design/package.json src/skills/penpot-implement-design/package-lock.json /workspace/src/skills/penpot-implement-design/
+RUN python3 -m pip install --no-cache-dir 'pytest>=8,<10' \
+    && npm ci --prefix headless \
+    && npm ci --prefix src/skills/penpot-import-html \
+    && npm ci --prefix src/skills/penpot-implement-design
+
+COPY . /workspace/

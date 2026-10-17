@@ -1,0 +1,9 @@
+# One-shot unit tests only; Penpot/OpenDesign remain under bin/mds.
+services:
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: mash-design-skills-tests:local
+    working_dir: /workspace
+    network_mode: none
