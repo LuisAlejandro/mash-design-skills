@@ -12,17 +12,14 @@ After you change a skill, re-run `./install.sh` so the global IDE homes match `s
 
 ## Tests
 
-Skill npm packages (each has `package.json` and `package-lock.json`):
+Run all offline unit suites in disposable test containers, not in the `mds`
+Penpot/OpenDesign runtime:
 
 ```bash
-npm test --prefix src/skills/penpot-import-html
-npm test --prefix src/skills/penpot-implement-design
+make test
 ```
 
-`penpot-create-design-system` has no test script yet.
-
-OpenDesign daemon helpers:
-
-```bash
-python3 -m pytest tests src/skills/od-design-candidates/tests
-```
+Use `make test-python`, `make test-skills`, or `make test-headless` to run one
+suite. `make test-image` builds the image without running tests.
+`penpot-create-design-system` has no test script yet. Live Penpot integration
+tests require a separately configured stack and are not part of `make test`.
