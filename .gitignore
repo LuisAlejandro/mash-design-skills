@@ -9,7 +9,20 @@ __pycache__/
 *.py[cod]
 *$py.class
 pipeline-smoke/
+# Working state written by the skills and maintainer tools. Never shipped:
+# plans, brainstorm notes and QA findings are local to a machine, and the
+# maintainer manifest lists what is installed there.
+.mash/brainstorms/
+.mash/plans/
 .mash/designs/
+.mash/solutions/
+.mash/insights/
 .mash/design-system/
+.mash/qa/
+.mash/parallel/
+.mash/deepening/
+.mash/loops/
+.mash/ideation/
+.mash/maintainer-manifest.json
 .cursor/penpot-implement-state-*.json
 inspiration/
