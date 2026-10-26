@@ -26,3 +26,6 @@ pipeline-smoke/
 .mash/maintainer-manifest.json
 .cursor/penpot-implement-state-*.json
 inspiration/
+
+# OS files
+.DS_Store
